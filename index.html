@@ -1,17 +1,60 @@
 <!DOCTYPE html>
 <html>
-    <head>
-        <title>
-            Trace - Immersive Analytics
-        </title>
-        <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-    </head>
-    <body>
-        <a-scene>
-            <a-box position="-1 0.5 -3" rotation="0 45 0" color="#4CC3D9"></a-box>
-            <a-box position="1 0.5 -3" rotation="0 -45 0" color="#FFC65D"></a-box>
-            <a-plane position="0 0 -4" rotation="-90 0 0" width="4" height="4" color="#7BC8A4"></a-plane>
-            <a-sky color="#ECECEC"></a-sky>
-        </a-scene>
-    </body>
+<head>
+    <title>Trace - Immersive Analytics</title>
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+</head>
+<body>
+    <a-scene>
+        <a-plane position="0 0 -4" rotation="-90 0 0" width="4" height="4" color="#7BC8A4"></a-plane>
+        <a-sky color="#ECECEC"></a-sky>
+    </a-scene>
+
+    <script>
+        window.onload = function () {
+            const API_URL = 'http://localhost:3000/api/data'; // Make sure your backend runs here
+
+            fetch(API_URL)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Data successfully fetched from server:', data);
+                    renderCube(data);
+                })
+                .catch(error => {
+                    console.error('There was a problem fetching the data:', error);
+                });
+        };
+
+        function renderCube(salesData) {
+            const scene = document.querySelector('a-scene');
+
+            salesData.forEach(dataPoint => {
+                const box = document.createElement('a-entity');
+
+                const boxHeight = dataPoint.sales / 100;
+                const xPosition = dataPoint.product === 'A' ? -1 : 1;
+                const zPosition = dataPoint.region === 'North' ? -3 : -5;
+                const yPosition = boxHeight / 2;
+                const boxColor = dataPoint.year === 2023 ? '#EF2D5E' : '#4CC3D9';
+
+                // Set geometry with dynamic height
+                box.setAttribute('geometry', {
+                    primitive: 'box',
+                    width: 0.9,
+                    height: boxHeight,
+                    depth: 0.9
+                });
+
+                // Set material color
+                box.setAttribute('material', 'color', boxColor);
+
+                // Set position
+                box.setAttribute('position', `${xPosition} ${yPosition} ${zPosition}`);
+
+                // Append box to the scene
+                scene.appendChild(box);
+            });
+        }
+    </script>
+</body>
 </html>
