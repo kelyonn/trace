@@ -8,6 +8,15 @@
     <a-scene>
         <a-plane position="0 0 -4" rotation="-90 0 0" width="4" height="4" color="#7BC8A4"></a-plane>
         <a-sky color="#ECECEC"></a-sky>
+        <a-entity camera looks-controls position="0 1.6 5" cursor="rayOrigin: mouse" raycaster="objects: .data-box"><a-text
+        id="tooltip"
+        value=""
+        position="0 -0.5 -1"
+        align="center"
+        color="#FFFFFF"
+        visible="false">
+        </a-text>
+        </a-entity>
     </a-scene>
 
     <script>
@@ -30,12 +39,13 @@
 
             salesData.forEach(dataPoint => {
                 const box = document.createElement('a-entity');
-
+                box.classList.add('data-box');
                 const boxHeight = dataPoint.sales / 100;
                 const xPosition = dataPoint.product === 'A' ? -1 : 1;
                 const zPosition = dataPoint.region === 'North' ? -3 : -5;
                 const yPosition = boxHeight / 2;
                 const boxColor = dataPoint.year === 2023 ? '#EF2D5E' : '#4CC3D9';
+                
 
                 // Set geometry with dynamic height
                 box.setAttribute('geometry', {
@@ -50,6 +60,23 @@
 
                 // Set position
                 box.setAttribute('position', `${xPosition} ${yPosition} ${zPosition}`);
+                
+                box.dataset.sales = dataPoint.sales;
+                box.dataset.region = dataPoint.region;
+                box.dataset.product = dataPoint.product;
+
+                const tooltipText = document.querySelector('#tooltip');
+
+                box.addEventListener('mouseenter', function (event) {
+                event.target.setAttribute('opacity', 0.7);
+                tooltipText.setAttribute('value', `Region: ${event.target.dataset.region}\nProduct: ${event.target.dataset.product}\nSales: ${event.target.dataset.sales}`);
+                tooltipText.setAttribute('visible', true);
+                });
+
+                box.addEventListener('mouseleave', function (event) {
+                event.target.setAttribute('opacity', 1.0);
+                tooltipText.setAttribute('visible', false);
+                });
 
                 // Append box to the scene
                 scene.appendChild(box);
