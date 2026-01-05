@@ -1,0 +1,10 @@
+[
+    { "region": "North", "product": "A", "year": 2023, "sales": 120 },
+    { "region": "North", "product": "B", "year": 2023, "sales": 170 },
+    { "region": "South", "product": "A", "year": 2023, "sales": 110 },
+    { "region": "South", "product": "B", "year": 2023, "sales": 210 },
+    { "region": "North", "product": "A", "year": 2024, "sales": 130 },
+    { "region": "North", "product": "B", "year": 2024, "sales": 180 },
+    { "region": "South", "product": "A", "year": 2024, "sales": 140 },
+    { "region": "South", "product": "B", "year": 2024, "sales": 230 }
+]
