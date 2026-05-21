@@ -1,10 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type QueryResult = {
   columns: { name: string; type: string }[];
   rows: unknown[][];
   nextUri: string | null;
 };
+
+type StatusPayload = {
+  trino: { ok: boolean; version: string | null; error: string | null };
+  postgres: { ok: boolean; error: string | null };
+};
+
+type ColumnInfo = { name: string; type: string };
 
 const initialSql = "SELECT c.name, c.industry, o.amount, o.status FROM customers c JOIN orders o ON c.id = o.customer_id LIMIT 10;";
 
@@ -13,6 +20,46 @@ const App = () => {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<StatusPayload | null>(null);
+  const [schemaTables, setSchemaTables] = useState<string[]>([]);
+  const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [tableColumns, setTableColumns] = useState<ColumnInfo[]>([]);
+  const [plan, setPlan] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [quickQuery, setQuickQuery] = useState("orders_by_status");
+
+  const apiBase = "http://localhost:3000/api/v1";
+
+  useEffect(() => {
+    const loadStatus = async () => {
+      try {
+        const response = await fetch(`${apiBase}/status`);
+        if (!response.ok) {
+          throw new Error("Status check failed");
+        }
+        const payload = (await response.json()) as StatusPayload;
+        setStatus(payload);
+      } catch (err) {
+        setStatusError(err instanceof Error ? err.message : "Status check failed");
+      }
+    };
+
+    const loadTables = async () => {
+      try {
+        const response = await fetch(`${apiBase}/schema`);
+        if (!response.ok) {
+          throw new Error("Schema fetch failed");
+        }
+        const payload = (await response.json()) as { tables: string[] };
+        setSchemaTables(payload.tables ?? []);
+      } catch (err) {
+        setStatusError(err instanceof Error ? err.message : "Schema fetch failed");
+      }
+    };
+
+    loadStatus();
+    loadTables();
+  }, []);
 
   const runQuery = async () => {
     setLoading(true);
@@ -36,6 +83,22 @@ const App = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const applyQuickQuery = (value: string) => {
+    setQuickQuery(value);
+    const templates: Record<string, string> = {
+      orders_by_status:
+        "SELECT status, COUNT(*) AS order_count, SUM(amount) AS total_amount FROM orders GROUP BY status ORDER BY total_amount DESC;",
+      revenue_by_region:
+        "SELECT c.region, SUM(o.amount) AS total_amount FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY c.region ORDER BY total_amount DESC;",
+      top_customers:
+        "SELECT c.name, SUM(o.amount) AS total_amount FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY c.name ORDER BY total_amount DESC LIMIT 5;",
+      recent_orders:
+        "SELECT o.id, c.name, o.amount, o.status, o.order_date FROM orders o JOIN customers c ON c.id = o.customer_id ORDER BY o.order_date DESC LIMIT 10;"
+    };
+
+    setSql(templates[value] ?? sql);
   };
 
   const loadMore = async () => {
@@ -70,6 +133,52 @@ const App = () => {
     }
   };
 
+  const loadColumns = async (tableName: string) => {
+    setSelectedTable(tableName);
+    setTableColumns([]);
+    setStatusError(null);
+    try {
+      const response = await fetch(`${apiBase}/schema?table=${tableName}`);
+      if (!response.ok) {
+        throw new Error("Column fetch failed");
+      }
+      const payload = (await response.json()) as { columns: ColumnInfo[] };
+      setTableColumns(payload.columns ?? []);
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : "Column fetch failed");
+    }
+  };
+
+  const previewTable = async () => {
+    if (!selectedTable) {
+      return;
+    }
+    setSql(`SELECT * FROM ${selectedTable} LIMIT 20;`);
+    await runQuery();
+  };
+
+  const explainQuery = async () => {
+    setPlan(null);
+    setStatusError(null);
+    try {
+      const response = await fetch(`${apiBase}/explain`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sql })
+      });
+
+      if (!response.ok) {
+        const payload = await response.json();
+        throw new Error(payload?.error?.message ?? "Explain failed");
+      }
+
+      const payload = (await response.json()) as { plan: string };
+      setPlan(payload.plan);
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : "Explain failed");
+    }
+  };
+
   return (
     <main className="page">
       <section className="hero">
@@ -83,9 +192,25 @@ const App = () => {
       <section className="panel">
         <div className="panel-header">
           <h2>Query runner</h2>
-          <button className="button" onClick={runQuery} disabled={loading}>
-            {loading ? "Running..." : "Run query"}
-          </button>
+          <div className="button-row">
+            <div className="select-wrapper">
+              <select
+                value={quickQuery}
+                onChange={(event) => applyQuickQuery(event.target.value)}
+              >
+                <option value="orders_by_status">Orders by status</option>
+                <option value="revenue_by_region">Revenue by region</option>
+                <option value="top_customers">Top customers</option>
+                <option value="recent_orders">Recent orders</option>
+              </select>
+            </div>
+            <button className="button ghost" onClick={explainQuery} disabled={loading}>
+              Explain
+            </button>
+            <button className="button" onClick={runQuery} disabled={loading}>
+              {loading ? "Running..." : "Run query"}
+            </button>
+          </div>
         </div>
         <textarea
           className="sql-input"
@@ -94,6 +219,90 @@ const App = () => {
           rows={5}
         />
         {error ? <p className="error">{error}</p> : null}
+        {plan ? (
+          <pre className="plan">{plan}</pre>
+        ) : null}
+      </section>
+
+      <section className="panel split">
+        <div>
+          <div className="panel-header">
+            <h2>Connection status</h2>
+          </div>
+          {status ? (
+            <div className="status-grid">
+              <div className="status-card">
+                <p className="status-title">Trino</p>
+                <span className={status.trino.ok ? "pill ok" : "pill warn"}>
+                  {status.trino.ok ? "Online" : "Offline"}
+                </span>
+                <p className="status-meta">
+                  {status.trino.ok ? `v${status.trino.version ?? "unknown"}` : status.trino.error}
+                </p>
+              </div>
+              <div className="status-card">
+                <p className="status-title">Postgres</p>
+                <span className={status.postgres.ok ? "pill ok" : "pill warn"}>
+                  {status.postgres.ok ? "Online" : "Offline"}
+                </span>
+                <p className="status-meta">
+                  {status.postgres.ok ? "Ready" : status.postgres.error}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <p className="muted">Checking services...</p>
+          )}
+          {statusError ? <p className="error">{statusError}</p> : null}
+        </div>
+        <div>
+          <div className="panel-header">
+            <h2>Schema browser</h2>
+          </div>
+          <div className="schema-grid">
+            <div className="schema-list">
+              {schemaTables.length ? (
+                schemaTables.map((table) => (
+                  <button
+                    key={table}
+                    className={table === selectedTable ? "schema-item active" : "schema-item"}
+                    onClick={() => loadColumns(table)}
+                  >
+                    {table}
+                  </button>
+                ))
+              ) : (
+                <p className="muted">No tables found.</p>
+              )}
+            </div>
+            <div className="schema-detail">
+              {selectedTable ? (
+                <>
+                  <div className="schema-header">
+                    <p className="status-title">{selectedTable}</p>
+                    <button className="button ghost" onClick={previewTable} disabled={loading}>
+                      Preview
+                    </button>
+                  </div>
+                  {tableColumns.length ? (
+                    <ul>
+                      {tableColumns.map((column) => (
+                        <li key={`${selectedTable}-${column.name}`}>
+                          <span>{column.name}</span>
+                          <span className="muted">{column.type}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="muted">Loading columns...</p>
+                  )}
+                </>
+              ) : (
+                <p className="muted">Select a table to inspect columns.</p>
+              )}
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="panel">

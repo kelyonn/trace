@@ -88,6 +88,21 @@ h1 {
   margin-bottom: 12px;
 }
 
+.button-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.select-wrapper select {
+  border-radius: 999px;
+  border: 1px solid #f1e4d7;
+  padding: 8px 14px;
+  font-weight: 600;
+  background: #fffaf5;
+}
+
 .button {
   border: none;
   background: var(--accent);
@@ -118,6 +133,15 @@ h1 {
   font-size: 0.95rem;
   background: #fffaf5;
   resize: vertical;
+}
+
+.plan {
+  background: #1f1b16;
+  color: #f3e7dc;
+  padding: 16px;
+  border-radius: 16px;
+  margin-top: 16px;
+  white-space: pre-wrap;
 }
 
 .table-wrapper {
@@ -154,8 +178,110 @@ th {
   margin: 0;
 }
 
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.status-card {
+  background: #fff7ef;
+  border-radius: 16px;
+  padding: 16px;
+  border: 1px solid #f1e4d7;
+}
+
+.status-title {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.status-meta {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.pill {
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.pill.ok {
+  background: #e5f7ed;
+  color: #127a4f;
+}
+
+.pill.warn {
+  background: #ffe6d8;
+  color: #b54708;
+}
+
+.schema-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) 1fr;
+  gap: 16px;
+}
+
+.schema-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.schema-item {
+  border: 1px solid #f1e4d7;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: white;
+  text-align: left;
+  cursor: pointer;
+}
+
+.schema-item.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(255, 107, 43, 0.2);
+}
+
+.schema-detail ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.schema-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.schema-detail li {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px dashed #f1e4d7;
+  padding-bottom: 6px;
+}
+
 @media (max-width: 720px) {
   .page {
     padding: 36px 6vw 60px;
+  }
+
+  .schema-grid {
+    grid-template-columns: 1fr;
   }
 }
