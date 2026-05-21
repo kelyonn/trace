@@ -58,6 +58,65 @@
 3) Export worker produces CSV/Parquet with watermark.
 4) Secure download link returned.
 
+## 4.5 Sequence Diagrams
+### 4.5.1 Connect and Authenticate
+```mermaid
+sequenceDiagram
+	participant U as User
+	participant UI as Web UI
+	participant API as API Gateway
+	participant AUTH as Auth Service
+	participant KC as Keycloak
+
+	U->>UI: Select data source
+	UI->>API: POST /auth/init
+	API->>AUTH: Start auth flow
+	AUTH->>KC: Redirect to IdP
+	KC-->>AUTH: Auth code
+	AUTH-->>UI: Session token
+```
+
+### 4.5.2 Query Execution and Streaming
+```mermaid
+sequenceDiagram
+	participant UI as Web UI
+	participant API as API Gateway
+	participant OPA as Policy Engine
+	participant QO as Query Orchestrator
+	participant TR as Trino
+	participant DB as Source DB
+
+	UI->>API: POST /queries
+	API->>OPA: Evaluate policy
+	OPA-->>API: Allow/deny
+	API->>QO: Execute query
+	QO->>TR: Pushdown query
+	TR->>DB: Execute
+	DB-->>TR: Result chunks
+	TR-->>QO: Stream results
+	QO-->>API: Stream results
+	API-->>UI: WebSocket data
+```
+
+### 4.5.3 Export
+```mermaid
+sequenceDiagram
+	participant UI as Web UI
+	participant API as API Gateway
+	participant OPA as Policy Engine
+	participant EXP as Export Worker
+	participant OBJ as Storage
+
+	UI->>API: POST /exports
+	API->>OPA: Evaluate export policy
+	OPA-->>API: Allow/deny
+	API->>EXP: Create export job
+	EXP->>OBJ: Write CSV/Parquet
+	OBJ-->>EXP: Signed URL
+	EXP-->>API: Export ready
+	API-->>UI: Download URL
+```
+
 ## 5. Components and Responsibilities
 ### 5.1 UI
 - Query builder and raw editor.

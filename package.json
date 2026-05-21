@@ -1,0 +1,15 @@
+{
+  "name": "trace",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "echo \"Add app dev scripts\"",
+    "build": "echo \"Add build scripts\"",
+    "lint": "echo \"Add lint scripts\"",
+    "test": "echo \"Add test scripts\""
+  }
+}
