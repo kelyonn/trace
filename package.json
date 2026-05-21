@@ -9,7 +9,9 @@
   "scripts": {
     "dev:api": "npm -w apps/api run dev",
     "dev:web": "npm -w apps/web run dev",
+    "dev:all": "bash infra/scripts/dev.sh",
     "build:api": "npm -w apps/api run build",
-    "build:web": "npm -w apps/web run build"
+    "build:web": "npm -w apps/web run build",
+    "test:smoke": "bash infra/scripts/sanity_check.sh"
   }
 }

@@ -23,6 +23,12 @@ Trace is a virtual OLAP and semantic exploration product that connects to one pr
 - Build API: npm run build:api
 - Build Web: npm run build:web
 
+## One-command local start
+- bash infra/scripts/dev.sh
+
+## Smoke test
+- bash infra/scripts/sanity_check.sh
+
 ## Local infrastructure
 - docker compose -f infra/docker/docker-compose.yml up
 
