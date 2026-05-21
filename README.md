@@ -18,7 +18,13 @@ Trace is a virtual OLAP and semantic exploration product that connects to one pr
 
 ## Getting started
 - Install dependencies: npm install
-- Start dev (to be wired): npm run dev
+- Start API: npm run dev:api
+- Start Web: npm run dev:web
+- Build API: npm run build:api
+- Build Web: npm run build:web
+
+## Local infrastructure
+- docker compose -f infra/docker/docker-compose.yml up
 
 ## Docs
 - docs/SYSTEM_DESIGN.md

@@ -7,9 +7,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "echo \"Add app dev scripts\"",
-    "build": "echo \"Add build scripts\"",
-    "lint": "echo \"Add lint scripts\"",
-    "test": "echo \"Add test scripts\""
+    "dev:api": "npm -w apps/api run dev",
+    "dev:web": "npm -w apps/web run dev",
+    "build:api": "npm -w apps/api run build",
+    "build:web": "npm -w apps/web run build"
   }
 }
