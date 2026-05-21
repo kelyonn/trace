@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import ThreePreview from "./ThreePreview";
 
 type QueryResult = {
   queryId?: string;
@@ -561,6 +562,14 @@ const App = () => {
         ) : (
           <p className="muted">Run a query to see results.</p>
         )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>3-D preview</h2>
+          <span className="muted">Auto fallback to 2-D if performance drops.</span>
+        </div>
+        <ThreePreview metric={result?.rows.length ?? 0} />
       </section>
 
       <section className="panel">
