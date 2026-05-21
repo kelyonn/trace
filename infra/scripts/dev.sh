@@ -8,6 +8,11 @@ cd "$root_dir"
 echo "Starting local infrastructure..."
 docker compose up -d
 
+if [[ ! -d node_modules ]]; then
+	echo "Installing dependencies..."
+	npm install
+fi
+
 echo "Starting API and Web apps..."
 (npm run dev:api &) >/dev/null 2>&1
 (npm run dev:web &) >/dev/null 2>&1
