@@ -5,6 +5,8 @@ type QueryResult = {
   queryId?: string;
   durationMs?: number;
   rowCount?: number;
+  cacheHit?: boolean;
+  maskColumns?: string[];
   columns: { name: string; type: string }[];
   rows: unknown[][];
   nextUri: string | null;
@@ -36,6 +38,46 @@ type DataSource = {
   status: string;
 };
 
+type Metrics = {
+  totalQueries: number;
+  queryErrors: number;
+  cacheHits: number;
+  exports: number;
+};
+
+type Notebook = {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type Snapshot = {
+  id: string;
+  name: string;
+  sql: string;
+  summary: string;
+  createdAt: string;
+};
+
+type AssistantSummary = {
+  rowCount: number;
+  columns: string[];
+  numericStats: { column: string; min: number | null; max: number | null; avg: number | null }[];
+};
+
+type AlertRule = {
+  id: string;
+  name: string;
+  sql: string;
+  comparison: ">" | "<" | ">=" | "<=";
+  threshold: number;
+  lastValue?: number;
+  lastTriggeredAt?: string;
+  createdAt: string;
+};
+
 const initialSql = "SELECT c.name, c.industry, o.amount, o.status FROM customers c JOIN orders o ON c.id = o.customer_id LIMIT 10;";
 
 const App = () => {
@@ -56,13 +98,38 @@ const App = () => {
   const [builderTable, setBuilderTable] = useState<string | null>(null);
   const [builderColumns, setBuilderColumns] = useState<string[]>([]);
   const [builderLimit, setBuilderLimit] = useState(50);
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem("trace_api_key") ?? "");
+  const [role, setRole] = useState(() => localStorage.getItem("trace_role") ?? "user");
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [notebooks, setNotebooks] = useState<Notebook[]>([]);
+  const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
+  const [notebookTitle, setNotebookTitle] = useState("");
+  const [notebookContent, setNotebookContent] = useState("");
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [assistantSummary, setAssistantSummary] = useState<AssistantSummary | null>(null);
+  const [alertName, setAlertName] = useState("New alert");
+  const [alertComparison, setAlertComparison] = useState<AlertRule["comparison"]>(">");
+  const [alertThreshold, setAlertThreshold] = useState(1000);
+  const [alerts, setAlerts] = useState<AlertRule[]>([]);
 
   const apiBase = "http://localhost:3000/api/v1";
+
+  const getHeaders = () => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (apiKey.trim()) {
+      headers.Authorization = `Bearer ${apiKey.trim()}`;
+    }
+    if (role) {
+      headers["x-trace-role"] = role;
+    }
+    return headers;
+  };
 
   useEffect(() => {
     const loadStatus = async () => {
       try {
-        const response = await fetch(`${apiBase}/status`);
+        const response = await fetch(`${apiBase}/status`, { headers: getHeaders() });
         if (!response.ok) {
           throw new Error("Status check failed");
         }
@@ -75,7 +142,7 @@ const App = () => {
 
     const loadTables = async () => {
       try {
-        const response = await fetch(`${apiBase}/schema`);
+        const response = await fetch(`${apiBase}/schema`, { headers: getHeaders() });
         if (!response.ok) {
           throw new Error("Schema fetch failed");
         }
@@ -88,7 +155,7 @@ const App = () => {
 
     const loadHistory = async () => {
       try {
-        const response = await fetch(`${apiBase}/history`);
+        const response = await fetch(`${apiBase}/history`, { headers: getHeaders() });
         if (!response.ok) {
           throw new Error("History fetch failed");
         }
@@ -105,7 +172,7 @@ const App = () => {
 
     const loadSources = async () => {
       try {
-        const response = await fetch(`${apiBase}/data-sources`);
+        const response = await fetch(`${apiBase}/data-sources`, { headers: getHeaders() });
         if (!response.ok) {
           throw new Error("Data sources fetch failed");
         }
@@ -118,7 +185,65 @@ const App = () => {
     };
 
     loadSources();
-  }, []);
+
+    const loadMetrics = async () => {
+      try {
+        const response = await fetch(`${apiBase}/metrics`, { headers: getHeaders() });
+        if (!response.ok) {
+          throw new Error("Metrics fetch failed");
+        }
+        const payload = (await response.json()) as Metrics;
+        setMetrics(payload);
+      } catch (err) {
+        setStatusError(err instanceof Error ? err.message : "Metrics fetch failed");
+      }
+    };
+
+    loadMetrics();
+
+    const loadNotebooks = async () => {
+      try {
+        const response = await fetch(`${apiBase}/notebooks`, { headers: getHeaders() });
+        if (!response.ok) {
+          throw new Error("Notebook fetch failed");
+        }
+        const payload = (await response.json()) as { items: Notebook[] };
+        setNotebooks(payload.items ?? []);
+      } catch (err) {
+        setStatusError(err instanceof Error ? err.message : "Notebook fetch failed");
+      }
+    };
+
+    const loadSnapshots = async () => {
+      try {
+        const response = await fetch(`${apiBase}/snapshots`, { headers: getHeaders() });
+        if (!response.ok) {
+          throw new Error("Snapshot fetch failed");
+        }
+        const payload = (await response.json()) as { items: Snapshot[] };
+        setSnapshots(payload.items ?? []);
+      } catch (err) {
+        setStatusError(err instanceof Error ? err.message : "Snapshot fetch failed");
+      }
+    };
+
+    const loadAlerts = async () => {
+      try {
+        const response = await fetch(`${apiBase}/alerts`, { headers: getHeaders() });
+        if (!response.ok) {
+          throw new Error("Alert fetch failed");
+        }
+        const payload = (await response.json()) as { items: AlertRule[] };
+        setAlerts(payload.items ?? []);
+      } catch (err) {
+        setStatusError(err instanceof Error ? err.message : "Alert fetch failed");
+      }
+    };
+
+    loadNotebooks();
+    loadSnapshots();
+    loadAlerts();
+  }, [apiKey, role]);
 
   const runQuery = async () => {
     setLoading(true);
@@ -126,7 +251,7 @@ const App = () => {
     try {
       const response = await fetch(`${apiBase}/query`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getHeaders(),
         body: JSON.stringify({ sql })
       });
 
@@ -145,7 +270,8 @@ const App = () => {
             submittedAt: new Date().toISOString(),
             durationMs: payload.durationMs ?? 0,
             rowCount: payload.rowCount ?? 0,
-            status: "completed"
+            status: "completed",
+            dataSourceId: activeSourceId ?? undefined
           },
           ...prev
         ]);
@@ -183,8 +309,8 @@ const App = () => {
     try {
       const response = await fetch(`${apiBase}/query/next`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nextUri: result.nextUri })
+        headers: getHeaders(),
+        body: JSON.stringify({ nextUri: result.nextUri, columns: result.columns })
       });
 
       if (!response.ok) {
@@ -210,7 +336,7 @@ const App = () => {
     setTableColumns([]);
     setStatusError(null);
     try {
-      const response = await fetch(`${apiBase}/schema?table=${tableName}`);
+      const response = await fetch(`${apiBase}/schema?table=${tableName}`, { headers: getHeaders() });
       if (!response.ok) {
         throw new Error("Column fetch failed");
       }
@@ -251,7 +377,8 @@ const App = () => {
     setStatusError(null);
     try {
       const response = await fetch(`${apiBase}/data-sources/${id}/activate`, {
-        method: "POST"
+        method: "POST",
+        headers: getHeaders()
       });
       if (!response.ok) {
         throw new Error("Failed to activate source");
@@ -266,7 +393,7 @@ const App = () => {
 
   const loadSchemaTables = async () => {
     try {
-      const response = await fetch(`${apiBase}/schema`);
+      const response = await fetch(`${apiBase}/schema`, { headers: getHeaders() });
       if (!response.ok) {
         throw new Error("Schema fetch failed");
       }
@@ -279,7 +406,7 @@ const App = () => {
 
   const loadStatusOnly = async () => {
     try {
-      const response = await fetch(`${apiBase}/status`);
+      const response = await fetch(`${apiBase}/status`, { headers: getHeaders() });
       if (!response.ok) {
         throw new Error("Status check failed");
       }
@@ -300,7 +427,7 @@ const App = () => {
     try {
       const response = await fetch(`${apiBase}/explain`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getHeaders(),
         body: JSON.stringify({ sql })
       });
 
@@ -316,6 +443,139 @@ const App = () => {
     }
   };
 
+  const createNotebook = async () => {
+    try {
+      const response = await fetch(`${apiBase}/notebooks`, {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify({ title: notebookTitle || "Untitled", content: notebookContent })
+      });
+      if (!response.ok) {
+        throw new Error("Notebook create failed");
+      }
+      const payload = (await response.json()) as Notebook;
+      setNotebooks((prev) => [payload, ...prev]);
+      setActiveNotebookId(payload.id);
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : "Notebook create failed");
+    }
+  };
+
+  const saveNotebook = async () => {
+    if (!activeNotebookId) {
+      return;
+    }
+    try {
+      const response = await fetch(`${apiBase}/notebooks/${activeNotebookId}`, {
+        method: "PUT",
+        headers: getHeaders(),
+        body: JSON.stringify({ title: notebookTitle, content: notebookContent })
+      });
+      if (!response.ok) {
+        throw new Error("Notebook save failed");
+      }
+      const payload = (await response.json()) as Notebook;
+      setNotebooks((prev) => prev.map((item) => (item.id === payload.id ? payload : item)));
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : "Notebook save failed");
+    }
+  };
+
+  const selectNotebook = (notebook: Notebook) => {
+    setActiveNotebookId(notebook.id);
+    setNotebookTitle(notebook.title);
+    setNotebookContent(notebook.content);
+  };
+
+  const createSnapshot = async () => {
+    const summary = result
+      ? `Rows: ${result.rowCount ?? result.rows.length}, Duration: ${result.durationMs ?? 0} ms`
+      : "No results";
+    try {
+      const response = await fetch(`${apiBase}/snapshots`, {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify({ name: `Snapshot ${new Date().toLocaleTimeString()}`, sql, summary })
+      });
+      if (!response.ok) {
+        throw new Error("Snapshot create failed");
+      }
+      const payload = (await response.json()) as Snapshot;
+      setSnapshots((prev) => [payload, ...prev]);
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : "Snapshot create failed");
+    }
+  };
+
+  const runAssistant = async () => {
+    setAssistantSummary(null);
+    try {
+      const response = await fetch(`${apiBase}/assistant/summary`, {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify({ sql })
+      });
+      if (!response.ok) {
+        const payload = await response.json();
+        throw new Error(payload?.error?.message ?? "Assistant failed");
+      }
+      const payload = (await response.json()) as AssistantSummary;
+      setAssistantSummary(payload);
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : "Assistant failed");
+    }
+  };
+
+  const createAlert = async () => {
+    try {
+      const response = await fetch(`${apiBase}/alerts`, {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify({
+          name: alertName,
+          sql,
+          comparison: alertComparison,
+          threshold: alertThreshold
+        })
+      });
+      if (!response.ok) {
+        const payload = await response.json();
+        throw new Error(payload?.error?.message ?? "Alert create failed");
+      }
+      const payload = (await response.json()) as AlertRule;
+      setAlerts((prev) => [payload, ...prev]);
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : "Alert create failed");
+    }
+  };
+
+  const evaluateAlert = async (alert: AlertRule) => {
+    try {
+      const response = await fetch(`${apiBase}/alerts/${alert.id}/evaluate`, {
+        method: "POST",
+        headers: getHeaders()
+      });
+      if (!response.ok) {
+        const payload = await response.json();
+        throw new Error(payload?.error?.message ?? "Alert evaluation failed");
+      }
+      const payload = (await response.json()) as { id: string; value: number | null; triggered: boolean };
+      setAlerts((prev) =>
+        prev.map((item) =>
+          item.id === payload.id
+            ? {
+                ...item,
+                lastValue: payload.value ?? undefined,
+                lastTriggeredAt: payload.triggered ? new Date().toISOString() : item.lastTriggeredAt
+              }
+            : item
+        )
+      );
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : "Alert evaluation failed");
+    }
+  };
+
   return (
     <main className="page">
       <section className="hero">
@@ -324,6 +584,42 @@ const App = () => {
         <p className="subhead">
           Run a query through Trino and inspect the results in a fast, minimal UI.
         </p>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Access</h2>
+          <span className="muted">Optional API key + role</span>
+        </div>
+        <div className="access-grid">
+          <label>
+            API key
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(event) => {
+                const value = event.target.value;
+                setApiKey(value);
+                localStorage.setItem("trace_api_key", value);
+              }}
+              placeholder="Leave empty for local dev"
+            />
+          </label>
+          <label>
+            Role
+            <select
+              value={role}
+              onChange={(event) => {
+                const value = event.target.value;
+                setRole(value);
+                localStorage.setItem("trace_role", value);
+              }}
+            >
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+          </label>
+        </div>
       </section>
 
       <section className="panel">
@@ -359,6 +655,44 @@ const App = () => {
         {plan ? (
           <pre className="plan">{plan}</pre>
         ) : null}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Insight assistant</h2>
+          <button className="button ghost" onClick={runAssistant} disabled={loading}>
+            Summarize
+          </button>
+        </div>
+        {assistantSummary ? (
+          <div className="assistant-grid">
+            <div className="assistant-card">
+              <p className="status-title">Rows</p>
+              <p className="assistant-value">{assistantSummary.rowCount}</p>
+            </div>
+            <div className="assistant-card">
+              <p className="status-title">Columns</p>
+              <p className="assistant-value">{assistantSummary.columns.length}</p>
+            </div>
+            <div className="assistant-card wide">
+              <p className="status-title">Numeric stats</p>
+              {assistantSummary.numericStats.length ? (
+                <ul>
+                  {assistantSummary.numericStats.map((stat) => (
+                    <li key={stat.column}>
+                      <span>{stat.column}</span>
+                      <span className="muted">min {stat.min ?? "-"}, max {stat.max ?? "-"}, avg {stat.avg ?? "-"}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted">No numeric columns detected.</p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="muted">Run a summary to see quick stats.</p>
+        )}
       </section>
 
       <section className="panel split">
@@ -528,17 +862,51 @@ const App = () => {
       <section className="panel">
         <div className="panel-header">
           <h2>Results</h2>
-          {result?.nextUri ? (
-            <button className="button ghost" onClick={loadMore} disabled={loading}>
-              Load more
+          <div className="button-row">
+            <button
+              className="button ghost"
+              disabled={!result || loading}
+              onClick={async () => {
+                if (!result) {
+                  return;
+                }
+                setExportStatus(null);
+                try {
+                  const response = await fetch(`${apiBase}/exports`, {
+                    method: "POST",
+                    headers: getHeaders(),
+                    body: JSON.stringify({ sql, format: "csv" })
+                  });
+                  if (!response.ok) {
+                    const payload = await response.json();
+                    throw new Error(payload?.error?.message ?? "Export failed");
+                  }
+                  const payload = (await response.json()) as { downloadUrl: string };
+                  window.open(`http://localhost:3000${payload.downloadUrl}`, "_blank");
+                  setExportStatus("Export ready");
+                } catch (err) {
+                  setExportStatus(err instanceof Error ? err.message : "Export failed");
+                }
+              }}
+            >
+              Export CSV
             </button>
-          ) : null}
+            {result?.nextUri ? (
+              <button className="button ghost" onClick={loadMore} disabled={loading}>
+                Load more
+              </button>
+            ) : null}
+          </div>
         </div>
         {result ? (
           <div className="table-wrapper">
             <div className="meta-row">
               <span>Rows: {result.rowCount ?? result.rows.length}</span>
               <span>Duration: {result.durationMs ?? 0} ms</span>
+              <span>{result.cacheHit ? "Cache hit" : "Live query"}</span>
+              {result.maskColumns?.length ? (
+                <span>Masked: {result.maskColumns.join(", ")}</span>
+              ) : null}
             </div>
             <table>
               <thead>
@@ -562,6 +930,80 @@ const App = () => {
         ) : (
           <p className="muted">Run a query to see results.</p>
         )}
+        {exportStatus ? <p className="status-meta">{exportStatus}</p> : null}
+      </section>
+
+      <section className="panel split">
+        <div>
+          <div className="panel-header">
+            <h2>Snapshots</h2>
+            <button className="button ghost" onClick={createSnapshot} disabled={loading}>
+              Save snapshot
+            </button>
+          </div>
+          {snapshots.length ? (
+            <div className="history-list">
+              {snapshots.map((snapshot) => (
+                <button
+                  key={snapshot.id}
+                  className="history-item"
+                  onClick={() => setSql(snapshot.sql)}
+                >
+                  <div>
+                    <p className="history-sql">{snapshot.name}</p>
+                    <p className="history-meta">{snapshot.summary}</p>
+                  </div>
+                  <span className="pill ok">Open</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">No snapshots yet.</p>
+          )}
+        </div>
+        <div>
+          <div className="panel-header">
+            <h2>Notebook</h2>
+            <div className="button-row">
+              <button className="button ghost" onClick={createNotebook}>
+                New
+              </button>
+              <button className="button" onClick={saveNotebook}>
+                Save
+              </button>
+            </div>
+          </div>
+          <div className="notebook">
+            <label>
+              Title
+              <input
+                value={notebookTitle}
+                onChange={(event) => setNotebookTitle(event.target.value)}
+                placeholder="Notebook title"
+              />
+            </label>
+            <label>
+              Notes
+              <textarea
+                rows={6}
+                value={notebookContent}
+                onChange={(event) => setNotebookContent(event.target.value)}
+                placeholder="Write notes here..."
+              />
+            </label>
+            <div className="notebook-list">
+              {notebooks.map((item) => (
+                <button
+                  key={item.id}
+                  className={item.id === activeNotebookId ? "schema-item active" : "schema-item"}
+                  onClick={() => selectNotebook(item)}
+                >
+                  {item.title}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="panel">
@@ -575,6 +1017,11 @@ const App = () => {
       <section className="panel">
         <div className="panel-header">
           <h2>Query history</h2>
+          {metrics ? (
+            <span className="muted">
+              Q: {metrics.totalQueries} · Errors: {metrics.queryErrors} · Cache: {metrics.cacheHits}
+            </span>
+          ) : null}
         </div>
         {history.length ? (
           <div className="history-list">
@@ -598,6 +1045,60 @@ const App = () => {
           </div>
         ) : (
           <p className="muted">No queries recorded yet.</p>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Alerts</h2>
+        </div>
+        <div className="alert-form">
+          <label>
+            Name
+            <input value={alertName} onChange={(event) => setAlertName(event.target.value)} />
+          </label>
+          <label>
+            Comparison
+            <select
+              value={alertComparison}
+              onChange={(event) => setAlertComparison(event.target.value as AlertRule["comparison"])}
+            >
+              <option value=">">&gt;</option>
+              <option value=">=">&gt;=</option>
+              <option value="<">&lt;</option>
+              <option value="<=">&lt;=</option>
+            </select>
+          </label>
+          <label>
+            Threshold
+            <input
+              type="number"
+              value={alertThreshold}
+              onChange={(event) => setAlertThreshold(Number(event.target.value))}
+            />
+          </label>
+          <button className="button" onClick={createAlert}>
+            Create alert
+          </button>
+        </div>
+        {alerts.length ? (
+          <div className="history-list">
+            {alerts.map((alert) => (
+              <div key={alert.id} className="history-item">
+                <div>
+                  <p className="history-sql">{alert.name}</p>
+                  <p className="history-meta">
+                    {alert.comparison} {alert.threshold} · Last: {alert.lastValue ?? "-"}
+                  </p>
+                </div>
+                <button className="button ghost" onClick={() => evaluateAlert(alert)}>
+                  Evaluate
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="muted">No alerts configured.</p>
         )}
       </section>
     </main>

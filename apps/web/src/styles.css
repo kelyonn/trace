@@ -88,6 +88,29 @@ h1 {
   margin-bottom: 12px;
 }
 
+.access-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.access-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.access-grid input,
+.access-grid select {
+  border-radius: 12px;
+  border: 1px solid #ead9ca;
+  padding: 10px 12px;
+  font-size: 0.95rem;
+  background: white;
+}
+
 .button-row {
   display: flex;
   gap: 12px;
@@ -401,6 +424,98 @@ th {
   margin: 0;
   font-size: 0.75rem;
   color: var(--muted);
+}
+
+.assistant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.assistant-card {
+  background: #fff7ef;
+  border-radius: 16px;
+  padding: 14px 16px;
+  border: 1px solid #f1e4d7;
+}
+
+.assistant-card.wide {
+  grid-column: span 2;
+}
+
+.assistant-card ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.assistant-card li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistant-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 4px 0 0;
+}
+
+.notebook {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.notebook label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.notebook input,
+.notebook textarea {
+  border-radius: 12px;
+  border: 1px solid #ead9ca;
+  padding: 10px 12px;
+  font-size: 0.95rem;
+  background: white;
+}
+
+.notebook-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.alert-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.alert-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.alert-form input,
+.alert-form select {
+  border-radius: 12px;
+  border: 1px solid #ead9ca;
+  padding: 10px 12px;
+  font-size: 0.95rem;
+  background: white;
 }
 
 @media (max-width: 720px) {
