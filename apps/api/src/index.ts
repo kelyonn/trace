@@ -1,5 +1,8 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import { randomUUID } from "crypto";
+import { promises as fs } from "fs";
+import path from "path";
 
 const server = Fastify({
   logger: true
@@ -10,6 +13,83 @@ const trinoBaseHeaders = {
   "X-Trino-User": "trace",
   "X-Trino-Catalog": "postgres",
   "X-Trino-Schema": "public"
+};
+
+type DataSource = {
+  id: string;
+  name: string;
+  type: "postgres" | "snowflake" | "bigquery" | "sqlserver";
+  status: "connected" | "auth_required" | "error";
+};
+
+const dataSources: DataSource[] = [
+  { id: "postgres-local", name: "Local Postgres", type: "postgres", status: "connected" }
+];
+let activeSourceId = dataSources[0]?.id ?? null;
+
+type QueryHistoryItem = {
+  id: string;
+  sql: string;
+  submittedAt: string;
+  durationMs: number;
+  rowCount: number | null;
+  status: "completed" | "failed";
+  error?: string;
+  dataSourceId: string;
+};
+
+type AuditEvent = {
+  id: string;
+  action: "query" | "schema" | "explain" | "activate_source";
+  dataSourceId: string;
+  timestamp: string;
+  detail?: string;
+};
+
+const dataDir = path.join(process.cwd(), "data");
+const historyFile = path.join(dataDir, "history.json");
+const auditFile = path.join(dataDir, "audit.json");
+
+let queryHistory: QueryHistoryItem[] = [];
+let auditEvents: AuditEvent[] = [];
+const maxHistory = 200;
+const maxAudit = 500;
+
+const readJson = async <T>(filePath: string, fallback: T) => {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+};
+
+const writeJson = async (filePath: string, payload: unknown) => {
+  await fs.mkdir(dataDir, { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(payload, null, 2));
+};
+
+const initStores = async () => {
+  queryHistory = await readJson<QueryHistoryItem[]>(historyFile, []);
+  auditEvents = await readJson<AuditEvent[]>(auditFile, []);
+};
+
+await initStores();
+
+const addHistory = (item: QueryHistoryItem) => {
+  queryHistory.unshift(item);
+  if (queryHistory.length > maxHistory) {
+    queryHistory.pop();
+  }
+  void writeJson(historyFile, queryHistory);
+};
+
+const addAudit = (event: AuditEvent) => {
+  auditEvents.unshift(event);
+  if (auditEvents.length > maxAudit) {
+    auditEvents.pop();
+  }
+  void writeJson(auditFile, auditEvents);
 };
 
 const fetchTrinoStatement = async (sql: string) => {
@@ -111,9 +191,44 @@ server.get("/api/v1/status", async () => {
   }
 
   return {
+    activeSourceId,
     trino: { ok: trinoOk, version: trinoVersion, error: trinoError },
     postgres: { ok: postgresOk, error: postgresError }
   };
+});
+
+server.get("/api/v1/history", async () => ({ items: queryHistory }));
+
+server.get("/api/v1/audit", async () => ({ items: auditEvents }));
+
+server.get("/api/v1/data-sources", async () => ({
+  activeSourceId,
+  items: dataSources
+}));
+
+server.post("/api/v1/data-sources/:id/activate", async (request, reply) => {
+  const params = request.params as { id?: string } | undefined;
+  const id = params?.id;
+
+  if (!id) {
+    return reply.status(400).send({ error: { code: "BAD_REQUEST", message: "id is required" } });
+  }
+
+  const source = dataSources.find((item) => item.id === id);
+  if (!source) {
+    return reply.status(404).send({ error: { code: "NOT_FOUND", message: "Data source not found" } });
+  }
+
+  activeSourceId = source.id;
+  addAudit({
+    id: randomUUID(),
+    action: "activate_source",
+    dataSourceId: source.id,
+    timestamp: new Date().toISOString(),
+    detail: source.name
+  });
+
+  return { activeSourceId };
 });
 
 server.post("/api/v1/query", async (request, reply) => {
@@ -124,15 +239,60 @@ server.post("/api/v1/query", async (request, reply) => {
     return reply.status(400).send({ error: { code: "BAD_REQUEST", message: "sql is required" } });
   }
 
+  const queryId = randomUUID();
+  const startedAt = Date.now();
+
   try {
     const payload = await fetchTrinoStatement(sql);
-    return { columns: payload.columns ?? [], rows: payload.data ?? [], nextUri: payload.nextUri ?? null };
+    const durationMs = Date.now() - startedAt;
+    const rowCount = payload.data?.length ?? 0;
+
+    addHistory({
+      id: queryId,
+      sql,
+      submittedAt: new Date().toISOString(),
+      durationMs,
+      rowCount,
+      status: "completed",
+      dataSourceId: activeSourceId ?? "unknown"
+    });
+
+    addAudit({
+      id: randomUUID(),
+      action: "query",
+      dataSourceId: activeSourceId ?? "unknown",
+      timestamp: new Date().toISOString(),
+      detail: sql
+    });
+
+    return {
+      queryId,
+      durationMs,
+      rowCount,
+      columns: payload.columns ?? [],
+      rows: payload.data ?? [],
+      nextUri: payload.nextUri ?? null
+    };
   } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    addHistory({
+      id: queryId,
+      sql,
+      submittedAt: new Date().toISOString(),
+      durationMs,
+      rowCount: null,
+      status: "failed",
+      error: message,
+      dataSourceId: activeSourceId ?? "unknown"
+    });
+
     return reply.status(502).send({
       error: {
         code: "TRINO_ERROR",
         message: "Trino request failed",
-        details: error instanceof Error ? error.message : "Unknown error"
+        details: message
       }
     });
   }
@@ -148,7 +308,11 @@ server.post("/api/v1/query/next", async (request, reply) => {
 
   try {
     const payload = await fetchTrinoNext(nextUri);
-    return { columns: payload.columns ?? [], rows: payload.data ?? [], nextUri: payload.nextUri ?? null };
+    return {
+      columns: payload.columns ?? [],
+      rows: payload.data ?? [],
+      nextUri: payload.nextUri ?? null
+    };
   } catch (error) {
     return reply.status(502).send({
       error: {
@@ -174,6 +338,12 @@ server.get("/api/v1/schema", async (request, reply) => {
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
         3
       );
+      addAudit({
+        id: randomUUID(),
+        action: "schema",
+        dataSourceId: activeSourceId ?? "unknown",
+        timestamp: new Date().toISOString()
+      });
       return { tables: payload.rows.map((row) => String(row[0])) };
     }
 
@@ -181,6 +351,14 @@ server.get("/api/v1/schema", async (request, reply) => {
       `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${table}' ORDER BY ordinal_position`,
       3
     );
+
+    addAudit({
+      id: randomUUID(),
+      action: "schema",
+      dataSourceId: activeSourceId ?? "unknown",
+      timestamp: new Date().toISOString(),
+      detail: table
+    });
 
     return {
       table,
@@ -208,6 +386,13 @@ server.post("/api/v1/explain", async (request, reply) => {
   try {
     const payload = await collectTrino(`EXPLAIN (TYPE DISTRIBUTED) ${sql}`, 2);
     const plan = payload.rows.map((row) => String(row[0])).join("\n");
+    addAudit({
+      id: randomUUID(),
+      action: "explain",
+      dataSourceId: activeSourceId ?? "unknown",
+      timestamp: new Date().toISOString(),
+      detail: sql
+    });
     return { plan };
   } catch (error) {
     return reply.status(502).send({
