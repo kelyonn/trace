@@ -1,0 +1,52 @@
+version: "1"
+
+cubes:
+  - name: orders
+    sql: SELECT * FROM orders
+    joins:
+      - name: customers
+        sql: "{orders.customer_id} = {customers.id}"
+        relationship: many_to_one
+    measures:
+      - name: total_amount
+        sql: amount
+        type: sum
+        description: Sum of all order amounts
+      - name: order_count
+        sql: id
+        type: count
+        description: Number of orders
+      - name: avg_amount
+        sql: amount
+        type: avg
+        description: Average order amount
+    dimensions:
+      - name: status
+        sql: status
+        type: string
+        description: Order status (shipped, pending, cancelled)
+      - name: order_date
+        sql: order_date
+        type: time
+        description: Date the order was placed
+
+  - name: customers
+    sql: SELECT * FROM customers
+    measures:
+      - name: customer_count
+        sql: id
+        type: count
+        description: Total number of customers
+    dimensions:
+      - name: name
+        sql: name
+        type: string
+        description: Customer name (PII — masked for non-admins)
+      - name: industry
+        sql: industry
+        type: string
+        description: Customer industry
+      - name: region
+        sql: region
+        type: string
+        description: Geographic region

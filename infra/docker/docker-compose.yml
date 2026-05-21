@@ -22,10 +22,12 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:25.0.4
-    command: start-dev
+    command: start-dev --import-realm
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+    volumes:
+      - ../../services/auth/realm-trace.json:/opt/keycloak/data/import/realm-trace.json:ro
     ports:
       - "8081:8080"
 
@@ -37,6 +39,19 @@ services:
       VAULT_DEV_ROOT_TOKEN_ID: root
     ports:
       - "8200:8200"
+
+  opa:
+    image: openpolicyagent/opa:0.66.0
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=info"
+      - "/policies"
+    volumes:
+      - ../../services/policy:/policies:ro
+    ports:
+      - "8181:8181"
 
 volumes:
   postgres_data:

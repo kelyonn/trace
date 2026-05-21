@@ -12,6 +12,12 @@
     "dev:all": "bash infra/scripts/dev.sh",
     "build:api": "npm -w apps/api run build",
     "build:web": "npm -w apps/web run build",
+    "test": "npm -w apps/api run test && npm -w apps/web run test",
     "test:smoke": "bash infra/scripts/sanity_check.sh"
+  },
+  "dependencies": {
+    "vega": "^6.2.0",
+    "vega-embed": "^7.1.0",
+    "vega-lite": "^6.4.3"
   }
 }

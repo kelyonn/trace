@@ -1,42 +1,31 @@
 import { useEffect, useState } from "react";
 import ThreePreview from "./ThreePreview";
+import CubeViewer from "./cube/CubeViewer";
+import { useAuth } from "./hooks/useAuth";
+import { useQueryStream } from "./hooks/useQueryStream";
+import type {
+  QueryResponse,
+  StatusResponse,
+  Column,
+  HistoryItem,
+  DataSource,
+  Notebook,
+  Snapshot,
+  AssistantSummary,
+  AlertRule,
+  SemanticModel,
+  SemanticCube
+} from "@trace/shared-types";
 
-type QueryResult = {
-  queryId?: string;
-  durationMs?: number;
-  rowCount?: number;
-  cacheHit?: boolean;
-  maskColumns?: string[];
-  columns: { name: string; type: string }[];
+type QueryResult = Partial<QueryResponse> & {
+  columns: Column[];
   rows: unknown[][];
   nextUri: string | null;
 };
 
-type StatusPayload = {
-  trino: { ok: boolean; version: string | null; error: string | null };
-  postgres: { ok: boolean; error: string | null };
-  activeSourceId?: string | null;
-};
+type StatusPayload = StatusResponse & { activeSourceId?: string | null };
 
-type ColumnInfo = { name: string; type: string };
-
-type HistoryItem = {
-  id: string;
-  sql: string;
-  submittedAt: string;
-  durationMs: number;
-  rowCount: number | null;
-  status: "completed" | "failed";
-  error?: string;
-  dataSourceId?: string;
-};
-
-type DataSource = {
-  id: string;
-  name: string;
-  type: string;
-  status: string;
-};
+type ColumnInfo = Column;
 
 type Metrics = {
   totalQueries: number;
@@ -45,42 +34,12 @@ type Metrics = {
   exports: number;
 };
 
-type Notebook = {
-  id: string;
-  title: string;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type Snapshot = {
-  id: string;
-  name: string;
-  sql: string;
-  summary: string;
-  createdAt: string;
-};
-
-type AssistantSummary = {
-  rowCount: number;
-  columns: string[];
-  numericStats: { column: string; min: number | null; max: number | null; avg: number | null }[];
-};
-
-type AlertRule = {
-  id: string;
-  name: string;
-  sql: string;
-  comparison: ">" | "<" | ">=" | "<=";
-  threshold: number;
-  lastValue?: number;
-  lastTriggeredAt?: string;
-  createdAt: string;
-};
-
 const initialSql = "SELECT c.name, c.industry, o.amount, o.status FROM customers c JOIN orders o ON c.id = o.customer_id LIMIT 10;";
 
 const App = () => {
+  const { state: authState, login, logout, accessToken } = useAuth();
+  const { state: streamState, runStream, cancel: cancelStream } = useQueryStream();
+
   const [sql, setSql] = useState(initialSql);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -112,13 +71,20 @@ const App = () => {
   const [alertComparison, setAlertComparison] = useState<AlertRule["comparison"]>(">");
   const [alertThreshold, setAlertThreshold] = useState(1000);
   const [alerts, setAlerts] = useState<AlertRule[]>([]);
+  const [semanticModel, setSemanticModel] = useState<SemanticModel | null>(null);
+  const [selectedCube, setSelectedCube] = useState<SemanticCube | null>(null);
+  const [selectedMeasure, setSelectedMeasure] = useState<string>("");
+  const [selectedDimensions, setSelectedDimensions] = useState<string[]>([]);
+  const [cubeMode, setCubeMode] = useState(false);
 
   const apiBase = "http://localhost:3000/api/v1";
 
   const getHeaders = () => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey.trim()) {
-      headers.Authorization = `Bearer ${apiKey.trim()}`;
+    // Prefer Keycloak JWT when available; fall back to manual API key
+    const token = accessToken ?? (apiKey.trim() || null);
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
     }
     if (role) {
       headers["x-trace-role"] = role;
@@ -243,6 +209,23 @@ const App = () => {
     loadNotebooks();
     loadSnapshots();
     loadAlerts();
+
+    const loadSemantic = async () => {
+      try {
+        const response = await fetch(`${apiBase}/semantic`, { headers: getHeaders() });
+        if (!response.ok) return;
+        const payload = (await response.json()) as SemanticModel;
+        setSemanticModel(payload);
+        if (payload.cubes?.length) {
+          setSelectedCube(payload.cubes[0]);
+          const firstMeasure = payload.cubes[0]?.measures?.[0]?.name ?? "";
+          setSelectedMeasure(firstMeasure);
+        }
+      } catch {
+        // semantic model is optional — no error surfaced to user
+      }
+    };
+    loadSemantic();
   }, [apiKey, role]);
 
   const runQuery = async () => {
@@ -265,13 +248,13 @@ const App = () => {
       if (payload.queryId) {
         setHistory((prev) => [
           {
-            id: payload.queryId,
+            id: payload.queryId as string,
             sql,
             submittedAt: new Date().toISOString(),
             durationMs: payload.durationMs ?? 0,
             rowCount: payload.rowCount ?? 0,
             status: "completed",
-            dataSourceId: activeSourceId ?? undefined
+            dataSourceId: activeSourceId ?? "unknown"
           },
           ...prev
         ]);
@@ -371,6 +354,38 @@ const App = () => {
     const columns = builderColumns.length ? builderColumns.join(", ") : "*";
     const limit = Number.isFinite(builderLimit) ? Math.max(1, builderLimit) : 50;
     setSql(`SELECT ${columns} FROM ${builderTable} LIMIT ${limit};`);
+  };
+
+  const buildSemanticSql = () => {
+    if (!selectedCube || !selectedMeasure) {
+      setStatusError("Select a cube and measure to build a semantic query.");
+      return;
+    }
+    const cube = selectedCube;
+    const measure = cube.measures.find((m) => m.name === selectedMeasure);
+    if (!measure) return;
+
+    const aggFn = (() => {
+      switch (measure.type) {
+        case "sum": return "SUM";
+        case "count": return "COUNT";
+        case "avg": return "AVG";
+        case "min": return "MIN";
+        case "max": return "MAX";
+        case "count_distinct": return "COUNT(DISTINCT";
+        default: return "SUM";
+      }
+    })();
+    const measureExpr = measure.type === "count_distinct"
+      ? `${aggFn} ${measure.sql}) AS ${measure.name}`
+      : `${aggFn}(${measure.sql}) AS ${measure.name}`;
+
+    if (selectedDimensions.length === 0) {
+      setSql(`SELECT ${measureExpr} FROM ${cube.name};`);
+    } else {
+      const dims = selectedDimensions.join(", ");
+      setSql(`SELECT ${dims}, ${measureExpr} FROM ${cube.name} GROUP BY ${selectedDimensions.map((_, i) => i + 1).join(", ")} ORDER BY ${selectedDimensions.length + 1} DESC;`);
+    }
   };
 
   const activateSource = async (id: string) => {
@@ -620,6 +635,21 @@ const App = () => {
             </select>
           </label>
         </div>
+        <div className="access-grid" style={{ marginTop: 12 }}>
+          {authState.status === "authenticated" ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span className="pill ok">Signed in via Keycloak</span>
+              <button className="button ghost" onClick={logout}>Sign out</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <button className="button ghost" onClick={login}>
+                Sign in with Keycloak
+              </button>
+              <span className="muted">Optional — leave blank for local dev</span>
+            </div>
+          )}
+        </div>
       </section>
 
       <section className="panel">
@@ -640,6 +670,18 @@ const App = () => {
             <button className="button ghost" onClick={explainQuery} disabled={loading}>
               Explain
             </button>
+            <button
+              className="button ghost"
+              onClick={() => runStream(sql, getHeaders())}
+              disabled={loading || streamState.status === "streaming"}
+            >
+              {streamState.status === "streaming" ? "Streaming..." : "Stream"}
+            </button>
+            {streamState.status === "streaming" ? (
+              <button className="button ghost" onClick={cancelStream}>
+                Cancel
+              </button>
+            ) : null}
             <button className="button" onClick={runQuery} disabled={loading}>
               {loading ? "Running..." : "Run query"}
             </button>
@@ -859,10 +901,86 @@ const App = () => {
         </div>
       </section>
 
+      {semanticModel && semanticModel.cubes.length > 0 ? (
+        <section className="panel">
+          <div className="panel-header">
+            <h2>Semantic builder</h2>
+            <button className="button ghost" onClick={buildSemanticSql}>
+              Generate SQL
+            </button>
+          </div>
+          <div className="builder">
+            <label>
+              Cube
+              <select
+                value={selectedCube?.name ?? ""}
+                onChange={(e) => {
+                  const cube = semanticModel.cubes.find((c) => c.name === e.target.value) ?? null;
+                  setSelectedCube(cube);
+                  setSelectedMeasure(cube?.measures?.[0]?.name ?? "");
+                  setSelectedDimensions([]);
+                }}
+              >
+                {semanticModel.cubes.map((c) => (
+                  <option key={c.name} value={c.name}>{c.name}</option>
+                ))}
+              </select>
+            </label>
+            {selectedCube ? (
+              <>
+                <label>
+                  Measure
+                  <select
+                    value={selectedMeasure}
+                    onChange={(e) => setSelectedMeasure(e.target.value)}
+                  >
+                    {selectedCube.measures.map((m) => (
+                      <option key={m.name} value={m.name}>
+                        {m.name} ({m.type})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div>
+                  <p className="status-title" style={{ marginBottom: 8 }}>Dimensions</p>
+                  <div className="builder-columns">
+                    {selectedCube.dimensions.map((d) => (
+                      <label key={d.name} className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={selectedDimensions.includes(d.name)}
+                          onChange={() =>
+                            setSelectedDimensions((prev) =>
+                              prev.includes(d.name)
+                                ? prev.filter((x) => x !== d.name)
+                                : [...prev, d.name]
+                            )
+                          }
+                        />
+                        <span>{d.name}</span>
+                        <span className="muted" style={{ marginLeft: 4 }}>{d.type}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
       <section className="panel">
         <div className="panel-header">
           <h2>Results</h2>
           <div className="button-row">
+            {result ? (
+              <button
+                className={cubeMode ? "button" : "button ghost"}
+                onClick={() => setCubeMode((v) => !v)}
+              >
+                {cubeMode ? "Table view" : "Cube view"}
+              </button>
+            ) : null}
             <button
               className="button ghost"
               disabled={!result || loading}
@@ -899,7 +1017,7 @@ const App = () => {
           </div>
         </div>
         {result ? (
-          <div className="table-wrapper">
+          <div>
             <div className="meta-row">
               <span>Rows: {result.rowCount ?? result.rows.length}</span>
               <span>Duration: {result.durationMs ?? 0} ms</span>
@@ -908,30 +1026,100 @@ const App = () => {
                 <span>Masked: {result.maskColumns.join(", ")}</span>
               ) : null}
             </div>
-            <table>
-              <thead>
-                <tr>
-                  {result.columns.map((column) => (
-                    <th key={column.name}>{column.name}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {result.rows.map((row, rowIndex) => (
-                  <tr key={`${rowIndex}-${row.length}`}>
-                    {row.map((cell, cellIndex) => (
-                      <td key={`${rowIndex}-${cellIndex}`}>{String(cell)}</td>
+            {cubeMode ? (
+              <CubeViewer
+                columns={result.columns}
+                rows={result.rows}
+                onDrill={(row, col) => {
+                  const dim0 = result.columns[0]?.name;
+                  const dim1 = result.columns[1]?.name;
+                  if (dim0 && dim1) {
+                    setSql(
+                      `${sql.replace(/;?\s*$/, "")} -- drilled\nSELECT * FROM (${sql.replace(/;?\s*$/, "")}) t WHERE ${dim0} = '${row}' AND ${dim1} = '${col}';`
+                    );
+                  }
+                }}
+              />
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      {result.columns.map((column) => (
+                        <th key={column.name}>{column.name}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.rows.map((row, rowIndex) => (
+                      <tr key={`${rowIndex}-${row.length}`}>
+                        {row.map((cell, cellIndex) => (
+                          <td key={`${rowIndex}-${cellIndex}`}>{String(cell)}</td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         ) : (
           <p className="muted">Run a query to see results.</p>
         )}
         {exportStatus ? <p className="status-meta">{exportStatus}</p> : null}
       </section>
+
+      {streamState.status !== "idle" ? (
+        <section className="panel">
+          <div className="panel-header">
+            <h2>Stream results</h2>
+            <span className="muted">
+              {streamState.status === "streaming"
+                ? `Streaming — ${streamState.rowCount} rows so far…`
+                : streamState.status === "complete"
+                ? `Complete — ${streamState.rowCount} rows in ${streamState.durationMs} ms`
+                : streamState.status === "error"
+                ? `Error`
+                : ""}
+            </span>
+          </div>
+          {streamState.status === "error" ? (
+            <p className="error">{streamState.message}</p>
+          ) : streamState.status === "streaming" || streamState.status === "complete" ? (
+            <div className="table-wrapper">
+              {streamState.status === "streaming" ? (
+                <div className="meta-row">
+                  <span className="pill warn">Live</span>
+                  <span>{streamState.rowCount} rows received</span>
+                </div>
+              ) : null}
+              <table>
+                <thead>
+                  <tr>
+                    {streamState.columns.map((col) => (
+                      <th key={col.name}>{col.name}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {streamState.rows.slice(0, 200).map((row, ri) => (
+                    <tr key={ri}>
+                      {(row as unknown[]).map((cell, ci) => (
+                        <td key={ci}>{String(cell)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {streamState.rows.length > 200 ? (
+                <p className="muted" style={{ marginTop: 8 }}>
+                  Showing first 200 of {streamState.rows.length} rows.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="panel split">
         <div>
@@ -1008,10 +1196,28 @@ const App = () => {
 
       <section className="panel">
         <div className="panel-header">
-          <h2>3-D preview</h2>
-          <span className="muted">Auto fallback to 2-D if performance drops.</span>
+          <h2>3-D cube viewer</h2>
+          <span className="muted">
+            {result?.columns.length === 3
+              ? "Drag to rotate · scroll to zoom · click a bar to drill"
+              : "Run a 3-column query (dim, dim, measure) to enable the cube"}
+          </span>
         </div>
-        <ThreePreview metric={result?.rows.length ?? 0} />
+        {result && result.columns.length >= 3 ? (
+          <CubeViewer
+            columns={result.columns}
+            rows={result.rows}
+            onDrill={(row, col) => {
+              const dim0 = result.columns[0]?.name;
+              const dim1 = result.columns[1]?.name;
+              if (dim0 && dim1) {
+                setSql(`SELECT * FROM (${sql.replace(/;?\s*$/, "")}) t WHERE ${dim0} = '${row}' AND ${dim1} = '${col}';`);
+              }
+            }}
+          />
+        ) : (
+          <ThreePreview metric={result?.rows.length ?? 0} />
+        )}
       </section>
 
       <section className="panel">

@@ -10,12 +10,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+
       - name: Install dependencies
         run: npm install
-      - name: Build API
+
+      - name: Typecheck API
         run: npm -w apps/api run build
-      - name: Build Web
+
+      - name: Typecheck Web
         run: npm -w apps/web run build
+
+      - name: Test API
+        run: npm -w apps/api run test
+
+      - name: Test Web
+        run: npm -w apps/web run test
+
+      - name: Lint – check for duplicate routes (sanity)
+        run: |
+          if grep -c 'server\.post.*"/api/v1/query"' apps/api/src/index.ts 2>/dev/null | grep -q '^[2-9]'; then
+            echo "Duplicate route detected!"; exit 1
+          fi
+          echo "Route sanity check passed"

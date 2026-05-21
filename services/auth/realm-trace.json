@@ -1,0 +1,61 @@
+{
+  "realm": "trace",
+  "enabled": true,
+  "displayName": "Trace",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 3600,
+  "clients": [
+    {
+      "clientId": "trace-web",
+      "name": "Trace Web UI",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "redirectUris": [
+        "http://localhost:5173/*",
+        "http://localhost:4173/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5173",
+        "http://localhost:4173"
+      ]
+    },
+    {
+      "clientId": "trace-api",
+      "name": "Trace API",
+      "enabled": true,
+      "publicClient": false,
+      "bearerOnly": true
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "admin", "description": "Full access including exports and column unmasking" },
+      { "name": "analyst", "description": "Read-only query and exploration access" }
+    ]
+  },
+  "users": [
+    {
+      "username": "admin@trace.local",
+      "enabled": true,
+      "email": "admin@trace.local",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "admin", "temporary": false }],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "analyst@trace.local",
+      "enabled": true,
+      "email": "analyst@trace.local",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "analyst", "temporary": false }],
+      "realmRoles": ["analyst"]
+    }
+  ]
+}
