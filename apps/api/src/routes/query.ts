@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "crypto";
-import { fetchTrinoStatement, fetchTrinoNext, collectTrino } from "../lib/trino.js";
+import { fetchTrinoStatement, fetchTrinoNext, collectTrino, type TrinoResult } from "../lib/trino.js";
 import { addHistory, addAudit } from "../lib/store.js";
 import { makeCacheKey, getCached, setCached } from "../lib/cache.js";
 import { getRole, maskRows, maskColumns } from "../lib/auth.js";
@@ -58,10 +58,11 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
 
       try {
         metrics.totalQueries += 1;
-        const payload = await fetchTrinoStatement(sql);
+        // collectTrino pages through all Trino async results automatically
+        const result: TrinoResult = await collectTrino(sql, 10);
         const durationMs = Date.now() - startedAt;
-        const columns = payload.columns ?? [];
-        const maskedRows = maskRows(columns, payload.data ?? [], role);
+        const { columns } = result;
+        const maskedRows = maskRows(columns, result.rows, role);
         const rowCount = maskedRows.length;
 
         setCached(key, { columns, rows: maskedRows, rowCount });
@@ -90,7 +91,7 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
           rowCount,
           columns,
           rows: maskedRows,
-          nextUri: payload.nextUri ?? null,
+          nextUri: result.nextUri ?? null,
           cacheHit: false,
           maskColumns: role === "admin" ? [] : maskColumns
         };
