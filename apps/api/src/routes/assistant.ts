@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { collectTrino } from "../lib/trino.js";
+import { evaluatePolicy } from "../lib/policy.js";
+import { maskRows } from "../lib/auth.js";
 
 export default async function assistantRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post<{ Body: { sql?: string } }>(
@@ -15,15 +17,25 @@ export default async function assistantRoutes(fastify: FastifyInstance): Promise
     },
     async (request, reply) => {
       const sql = (request.body.sql ?? "").trim();
+      const { role, maskColumns: colsToMask } = request.trace;
+
       if (!sql) {
         return reply
           .status(400)
           .send({ error: { code: "BAD_REQUEST", message: "sql is required" } });
       }
 
+      const allowed = await evaluatePolicy({ role, action: "query", sql });
+      if (!allowed) {
+        return reply
+          .status(403)
+          .send({ error: { code: "FORBIDDEN", message: "Query blocked by policy" } });
+      }
+
       try {
         const result = await collectTrino(sql, 3);
-        const { columns, rows } = result;
+        const { columns } = result;
+        const rows = maskRows(columns, result.rows, role, colsToMask);
 
         const numericIndexes = columns
           .map((col, i) => ({

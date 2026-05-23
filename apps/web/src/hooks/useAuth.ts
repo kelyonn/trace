@@ -120,13 +120,17 @@ export function useAuth() {
         tokensRef.current = tokens;
         setState({ status: "authenticated", tokens });
         scheduleRefresh(tokens);
+        window.dispatchEvent(new CustomEvent("trace:auth-complete"));
       })
       .catch((err) => {
         setState({ status: "error", message: err instanceof Error ? err.message : "Auth failed" });
       });
   }, [scheduleRefresh]);
 
-  const login = useCallback(async () => {
+  const login = useCallback(async (pendingSourceId?: string) => {
+    if (pendingSourceId) {
+      sessionStorage.setItem("trace_pending_source", pendingSourceId);
+    }
     const { verifier, challenge } = await generatePkce();
     const oauthState = base64url(crypto.getRandomValues(new Uint8Array(16)));
     sessionStorage.setItem("pkce_verifier", verifier);

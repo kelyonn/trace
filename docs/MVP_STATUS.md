@@ -1,33 +1,45 @@
 # Trace MVP Status
 
-Maps every PRD functional requirement (FR-1 through FR-10) to its current implementation state.
+Maps PRD functional requirements (FR-1 through FR-10) to implementation. Last updated for `v0.1.0-mvp` completion pass.
 
 | FR | Requirement | Status | Where |
 |----|-------------|--------|-------|
-| FR-1 | UI lists all configured database containers with status (connected / auth-required) | Done | `GET /api/v1/data-sources` → `apps/api/src/routes/datasources.ts`; `apps/web/src/App.tsx` Data sources panel |
-| FR-2 | Selecting a container initiates an authentication flow; on success the cube loads schema automatically | Partial | Source activation works (`POST /api/v1/data-sources/:id/activate`). OAuth/SAML flow pending — Phase 5 |
-| FR-3 | Visual builder or raw SQL; engine parses and executes against the active source | Done | `POST /api/v1/query` → Trino pushdown; Visual builder in `apps/web/src/App.tsx`; semantic builder wired in Phase 3 |
-| FR-4 | Query results streamed to 3-D viewer within 2 s for ≤ 50M rows (P95) | Partial | Sync query path live; SSE streaming endpoint in Phase 6; 3-D cube viewer in Phase 7 |
-| FR-5 | All data-fetch operations logged with user, timestamp, and source DB | Done | `apps/api/src/lib/store.ts` audit log; `GET /api/v1/audit` |
-| FR-6 | Enforce per-user permissions via a central policy engine (OPA) | Partial | Local `isSafeQuery` blocks writes/DDL; full OPA integration in Phase 4 |
-| FR-7 | Export function respects the same security constraints as the source DB | Done | `POST /api/v1/exports` gated on admin role via `evaluatePolicy`; `apps/api/src/routes/exports.ts` |
-| FR-8 | Runs on macOS, Windows, Linux with Docker + WebGL | Done | Docker Compose at `infra/docker/`; Three.js WebGL rendering in `apps/web/src/ThreePreview.tsx` |
-| FR-9 | Query history accessible, replayable, exportable with explain-plan | Done | `GET /api/v1/history`; `POST /api/v1/explain`; history panel in UI |
-| FR-10 | 2-D fallback view for hardware that cannot sustain 3-D rendering | Done | FPS sampler in `ThreePreview.tsx`; full Vega-Lite fallback in Phase 7 |
+| FR-1 | UI lists configured data sources with status | **Done** | `GET /api/v1/data-sources`, Data sources panel in `apps/web/src/App.tsx` |
+| FR-2 | Selecting a source triggers auth; on success schema loads | **Done** | `auth_required` sources require Keycloak JWT on activate; pending source resumed after PKCE (`useAuth`, `activateSource`) |
+| FR-3 | Visual / semantic builder or raw SQL against active source | **Done** | `POST /api/v1/query`, semantic builder, visual builder |
+| FR-4 | Results streamed to 3-D viewer (P95 ≤ 2s @ 50M rows) | **Partial** | SSE `POST /queries` + `GET /queries/:id/stream`, `?stream=true` on sync query; cube viewer live; large-scale perf not benchmarked |
+| FR-5 | All data-fetch ops audited | **Done** | `lib/store.ts` audit log, `GET /api/v1/audit` |
+| FR-6 | Central policy engine (OPA) | **Done** | `services/policy/policy.rego`, `OPA_ENABLED`, `evaluatePolicy` on query/schema/export/activate; `getMaskColumns` from OPA |
+| FR-7 | Export respects same constraints as source | **Done** | Export gated on admin + query policy on SQL |
+| FR-8 | macOS / Windows / Linux + Docker + WebGL | **Done** | Docker Compose, Three.js cube |
+| FR-9 | Query history, replay, explain | **Done** | History panel, `POST /api/v1/explain` |
+| FR-10 | 2-D fallback when 3-D cannot sustain FPS | **Done** | `CubeViewer` Vega-Lite heatmap when FPS &lt; 20 |
 
-## Out of scope for this MVP iteration
+## Platform features (plan phases 1–8)
 
-- Snowflake, BigQuery, SQL Server connectors (Postgres only; see `services/connector/README.md`)
-- HashiCorp Vault secrets rotation (Vault container present but unused)
-- Kubernetes manifests (`infra/k8s/` deferred; see that directory's README)
-- OpenTelemetry distributed tracing
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1 | Modular API, tests, CI, infra dedup | **Done** |
+| 2 | Tracked docs, `.env.example`, READMEs | **Done** |
+| 3 | `@trace/shared-types`, semantic model | **Done** |
+| 4 | OPA policies + sidecar + API integration | **Done** |
+| 5 | Keycloak realm, PKCE web, JWT + API key auth | **Done** |
+| 6 | SSE streaming + token query param for EventSource | **Done** |
+| 7 | `CubeViewer`, `pivot.ts`, drill-through, Vega fallback | **Done** |
+| 8 | WORKING/TESTING/pilot docs, `v0.1.0-mvp` tag | **Done** |
 
-## Phase backlog
+## Auth modes
 
-| Phase | Feature | Notes |
-|-------|---------|-------|
-| 3 | Shared types, semantic model, `/api/v1/semantic` | In progress |
-| 4 | OPA policy enforcement | Rego files in `services/policy/` |
-| 5 | Keycloak OAuth (PKCE) | Realm export in `services/auth/` |
-| 6 | SSE streaming for query results | Matches `API_SPEC.md §6` |
-| 7 | Real 3-D OLAP cube viewer (OrbitControls, drill-through) | Replaces decorative bar chart |
+| Mode | Env | Behavior |
+|------|-----|----------|
+| Local dev (default) | `AUTH_REQUIRED=false` | No credential required; optional `x-trace-role` + API key |
+| API key | `AUTH_REQUIRED=true` | Bearer must match `API_KEY` |
+| Keycloak | `KEYCLOAK_ENABLED=true` | Valid JWT sets role from `realm_access.roles`; API key still accepted when `AUTH_REQUIRED=true` |
+| SSE | `?token=` on stream URL | Passes Bearer token when `EventSource` cannot send headers |
+
+## Out of scope (deferred)
+
+- Snowflake / BigQuery / SQL Server connectors (Postgres via Trino only)
+- Vault secrets rotation
+- Kubernetes manifests (`infra/k8s/README.md`)
+- OpenTelemetry tracing

@@ -40,10 +40,12 @@ Add to your `.env`:
 
 ```
 AUTH_REQUIRED=true
+KEYCLOAK_ENABLED=true
 KEYCLOAK_URL=http://localhost:8081
 KEYCLOAK_REALM=trace
-KEYCLOAK_CLIENT_ID=trace-api
 ```
+
+The API accepts either a valid JWT (when `KEYCLOAK_ENABLED=true`) or the `API_KEY` as the Bearer token.
 
 The API verifies Bearer JWTs using Keycloak's JWKS endpoint, with a 10-minute local cache. The `realm_access.roles` claim maps to the internal role: `admin` → full access, `analyst` → user-level access.
 

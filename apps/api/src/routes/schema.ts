@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { collectTrino } from "../lib/trino.js";
 import { addAudit } from "../lib/store.js";
 import { activeSourceId } from "../lib/state.js";
+import { evaluatePolicy } from "../lib/policy.js";
 
 const SAFE_NAME = /^[a-zA-Z0-9_]+$/;
 
@@ -19,6 +20,14 @@ export default async function schemaRoutes(fastify: FastifyInstance): Promise<vo
     },
     async (request, reply) => {
       const table = (request.query.table ?? "").trim();
+      const { role } = request.trace;
+
+      const allowed = await evaluatePolicy({ role, action: "schema" });
+      if (!allowed) {
+        return reply
+          .status(403)
+          .send({ error: { code: "FORBIDDEN", message: "Schema access denied by policy" } });
+      }
 
       if (table && !SAFE_NAME.test(table)) {
         return reply
@@ -43,7 +52,6 @@ export default async function schemaRoutes(fastify: FastifyInstance): Promise<vo
           return { tables: result.rows.map((row) => String(row[0])) };
         }
 
-        // Table name is validated as alphanumeric+underscore only — safe to interpolate
         const result = await collectTrino(
           `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${table}' ORDER BY ordinal_position`,
           3

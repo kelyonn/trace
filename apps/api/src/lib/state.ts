@@ -18,7 +18,13 @@ export type Metrics = {
 };
 
 export const dataSources: DataSource[] = [
-  { id: "postgres-local", name: "Local Postgres", type: "postgres", status: "connected" }
+  { id: "postgres-local", name: "Local Postgres", type: "postgres", status: "connected" },
+  {
+    id: "snowflake-demo",
+    name: "Snowflake (demo)",
+    type: "snowflake",
+    status: "auth_required"
+  }
 ];
 
 export let activeSourceId: string = dataSources[0]?.id ?? "postgres-local";

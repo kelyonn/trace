@@ -1,13 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { promises as fs } from "fs";
-import path from "path";
 import yaml from "js-yaml";
 import type { SemanticModel } from "@trace/shared-types";
+import { resolveRepoPath } from "../lib/paths.js";
 
-const semanticPath = path.resolve(
-  process.cwd(),
-  "../../services/query-engine/semantic.yml"
-);
+const semanticPath = resolveRepoPath("services/query-engine/semantic.yml");
 
 let cachedModel: SemanticModel | null = null;
 
@@ -18,7 +15,6 @@ async function loadSemanticModel(): Promise<SemanticModel> {
     cachedModel = yaml.load(raw) as SemanticModel;
     return cachedModel;
   } catch {
-    // Graceful degradation: return an empty model if the file is not found
     return { version: "1", cubes: [] };
   }
 }

@@ -4,7 +4,6 @@ import { promises as fs } from "fs";
 import path from "path";
 import { collectTrino } from "../lib/trino.js";
 import { dataDir } from "../lib/store.js";
-import { getRole } from "../lib/auth.js";
 import { evaluatePolicy } from "../lib/policy.js";
 import { activeSourceId, exportJobs, metrics } from "../lib/state.js";
 
@@ -24,7 +23,7 @@ export default async function exportRoutes(fastify: FastifyInstance): Promise<vo
       }
     },
     async (request, reply) => {
-      const role = getRole(request.headers as Record<string, unknown>);
+      const { role } = request.trace;
       const allowed = await evaluatePolicy({ role, action: "export" });
       if (!allowed) {
         return reply
@@ -46,9 +45,15 @@ export default async function exportRoutes(fastify: FastifyInstance): Promise<vo
           .send({ error: { code: "BAD_REQUEST", message: "Only csv format is supported" } });
       }
 
+      const queryAllowed = await evaluatePolicy({ role, action: "query", sql });
+      if (!queryAllowed) {
+        return reply
+          .status(403)
+          .send({ error: { code: "FORBIDDEN", message: "Export SQL blocked by policy" } });
+      }
+
       const exportId = randomUUID();
       exportJobs[exportId] = { id: exportId, status: "queued", createdAt: new Date().toISOString() };
-      void activeSourceId; // referenced for audit context
 
       try {
         metrics.exports += 1;
@@ -113,6 +118,12 @@ export default async function exportRoutes(fastify: FastifyInstance): Promise<vo
       }
     },
     async (request, reply) => {
+      const { role } = request.trace;
+      const allowed = await evaluatePolicy({ role, action: "export" });
+      if (!allowed) {
+        return reply.status(403).send({ error: { code: "FORBIDDEN", message: "Export requires admin role" } });
+      }
+
       const { id } = request.params;
       const job = exportJobs[id];
       if (!job) {
@@ -140,6 +151,12 @@ export default async function exportRoutes(fastify: FastifyInstance): Promise<vo
       }
     },
     async (request, reply) => {
+      const { role } = request.trace;
+      const allowed = await evaluatePolicy({ role, action: "export" });
+      if (!allowed) {
+        return reply.status(403).send({ error: { code: "FORBIDDEN", message: "Export requires admin role" } });
+      }
+
       const { id } = request.params;
       const job = exportJobs[id];
       if (!job?.filePath) {

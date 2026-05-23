@@ -2,22 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "crypto";
 import { fetchTrinoStatement, fetchTrinoNext } from "../lib/trino.js";
 import { addHistory, addAudit } from "../lib/store.js";
-import { getRole, maskRows } from "../lib/auth.js";
+import { maskRows } from "../lib/auth.js";
 import { evaluatePolicy } from "../lib/policy.js";
 import { activeSourceId, metrics } from "../lib/state.js";
-
-/**
- * Pending streaming queries: queryId → { sql, role }
- * The client first POSTs /api/v1/queries to create a job, then GETs /stream.
- */
-export const pendingQueries = new Map<string, { sql: string; role: string }>();
+import { pendingQueries, enqueueStreamJob } from "../lib/stream-jobs.js";
 
 export default async function streamRoutes(fastify: FastifyInstance): Promise<void> {
-  /**
-   * POST /api/v1/queries
-   * Creates a query job and returns a queryId immediately.
-   * Client then opens GET /api/v1/queries/:id/stream to receive results via SSE.
-   */
   fastify.post<{ Body: { sql?: string } }>(
     "/api/v1/queries",
     {
@@ -31,7 +21,7 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
     },
     async (request, reply) => {
       const sql = (request.body.sql ?? "").trim();
-      const role = getRole(request.headers as Record<string, unknown>);
+      const { role, maskColumns: colsToMask } = request.trace;
 
       if (!sql) {
         return reply
@@ -46,26 +36,13 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
           .send({ error: { code: "FORBIDDEN", message: "Query blocked by policy" } });
       }
 
-      const queryId = randomUUID();
-      pendingQueries.set(queryId, { sql, role });
-
-      // Clean up after 5 minutes if the client never connects
-      setTimeout(() => pendingQueries.delete(queryId), 300_000);
-
+      const queryId = enqueueStreamJob({ sql, role, maskColumns: colsToMask });
       reply.status(202);
       return { queryId, status: "pending", streamUrl: `/api/v1/queries/${queryId}/stream` };
     }
   );
 
-  /**
-   * GET /api/v1/queries/:id/stream
-   * SSE stream. Emits:
-   *   - event: data  — a batch of rows
-   *   - event: progress — row count so far
-   *   - event: complete — final summary
-   *   - event: error — error detail
-   */
-  fastify.get<{ Params: { id: string } }>(
+  fastify.get<{ Params: { id: string }; Querystring: { token?: string } }>(
     "/api/v1/queries/:id/stream",
     {
       schema: {
@@ -73,6 +50,10 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
           type: "object",
           required: ["id"],
           properties: { id: { type: "string" } }
+        },
+        querystring: {
+          type: "object",
+          properties: { token: { type: "string" } }
         }
       }
     },
@@ -86,10 +67,9 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
       }
 
       pendingQueries.delete(id);
-      const { sql, role } = job;
+      const { sql, role, maskColumns: colsToMask } = job;
       const sourceId = activeSourceId;
 
-      // Set SSE headers
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -109,7 +89,7 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
       try {
         const first = await fetchTrinoStatement(sql);
         columns = first.columns ?? [];
-        const maskedRows = maskRows(columns, first.data ?? [], role);
+        const maskedRows = maskRows(columns, first.data ?? [], role, colsToMask);
         totalRows += maskedRows.length;
 
         if (maskedRows.length > 0) {
@@ -126,7 +106,7 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
           if (next.columns?.length && columns.length === 0) {
             columns = next.columns;
           }
-          const batch = maskRows(columns, next.data ?? [], role);
+          const batch = maskRows(columns, next.data ?? [], role, colsToMask);
           totalRows += batch.length;
           if (batch.length > 0) {
             send("data", { columns, rows: batch });
@@ -177,7 +157,6 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
         reply.raw.end();
       }
 
-      // Return the raw response — Fastify must not interfere
       return reply;
     }
   );

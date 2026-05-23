@@ -228,6 +228,36 @@ const App = () => {
     loadSemantic();
   }, [apiKey, role]);
 
+  useEffect(() => {
+    if (!accessToken) return;
+    try {
+      const payload = JSON.parse(atob(accessToken.split(".")[1])) as {
+        realm_access?: { roles?: string[] };
+      };
+      const roles = payload.realm_access?.roles ?? [];
+      if (roles.includes("admin")) {
+        setRole("admin");
+        localStorage.setItem("trace_role", "admin");
+      } else if (roles.includes("analyst")) {
+        setRole("user");
+        localStorage.setItem("trace_role", "user");
+      }
+    } catch {
+      /* ignore malformed token */
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    const onAuthComplete = () => {
+      const pending = sessionStorage.getItem("trace_pending_source");
+      if (!pending) return;
+      sessionStorage.removeItem("trace_pending_source");
+      void activateSource(pending);
+    };
+    window.addEventListener("trace:auth-complete", onAuthComplete);
+    return () => window.removeEventListener("trace:auth-complete", onAuthComplete);
+  }, [accessToken]);
+
   const runQuery = async () => {
     setLoading(true);
     setError(null);
@@ -390,16 +420,31 @@ const App = () => {
 
   const activateSource = async (id: string) => {
     setStatusError(null);
+    const source = dataSources.find((s) => s.id === id);
+    if (source?.status === "auth_required" && !accessToken) {
+      await login(id);
+      return;
+    }
     try {
       const response = await fetch(`${apiBase}/data-sources/${id}/activate`, {
         method: "POST",
         headers: getHeaders()
       });
       if (!response.ok) {
-        throw new Error("Failed to activate source");
+        const body = await response.json().catch(() => ({}));
+        if (body?.error?.code === "AUTH_REQUIRED") {
+          await login(id);
+          return;
+        }
+        throw new Error(body?.error?.message ?? "Failed to activate source");
       }
-      const payload = (await response.json()) as { activeSourceId: string };
+      const payload = (await response.json()) as { activeSourceId: string; status?: string };
       setActiveSourceId(payload.activeSourceId);
+      setDataSources((prev) =>
+        prev.map((s) =>
+          s.id === id ? { ...s, status: (payload.status as DataSource["status"]) ?? "connected" } : s
+        )
+      );
       await Promise.all([loadSchemaTables(), loadStatusOnly()]);
     } catch (err) {
       setStatusError(err instanceof Error ? err.message : "Failed to activate source");
@@ -839,7 +884,11 @@ const App = () => {
                     <p className="status-meta">{source.type} · {source.status}</p>
                   </div>
                   <span className={source.id === activeSourceId ? "pill ok" : "pill warn"}>
-                    {source.id === activeSourceId ? "Active" : "Select"}
+                    {source.id === activeSourceId
+                      ? "Active"
+                      : source.status === "auth_required"
+                      ? "Sign in"
+                      : "Select"}
                   </span>
                 </button>
               ))

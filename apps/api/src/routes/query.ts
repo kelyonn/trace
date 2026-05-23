@@ -1,17 +1,22 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "crypto";
-import { fetchTrinoStatement, fetchTrinoNext, collectTrino, type TrinoResult } from "../lib/trino.js";
+import { fetchTrinoNext, collectTrino, type TrinoResult } from "../lib/trino.js";
 import { addHistory, addAudit } from "../lib/store.js";
 import { makeCacheKey, getCached, setCached } from "../lib/cache.js";
-import { getRole, maskRows, maskColumns } from "../lib/auth.js";
+import { maskRows } from "../lib/auth.js";
 import { evaluatePolicy } from "../lib/policy.js";
 import { activeSourceId, metrics } from "../lib/state.js";
+import { enqueueStreamJob } from "../lib/stream-jobs.js";
 
 export default async function queryRoutes(fastify: FastifyInstance): Promise<void> {
-  fastify.post<{ Body: { sql?: string } }>(
+  fastify.post<{ Body: { sql?: string }; Querystring: { stream?: string } }>(
     "/api/v1/query",
     {
       schema: {
+        querystring: {
+          type: "object",
+          properties: { stream: { type: "string", enum: ["true", "false"] } }
+        },
         body: {
           type: "object",
           required: ["sql"],
@@ -21,7 +26,7 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
     },
     async (request, reply) => {
       const sql = (request.body.sql ?? "").trim();
-      const role = getRole(request.headers as Record<string, unknown>);
+      const { role, maskColumns: colsToMask } = request.trace;
 
       if (!sql) {
         return reply
@@ -34,6 +39,16 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
         return reply
           .status(403)
           .send({ error: { code: "FORBIDDEN", message: "Query blocked by policy" } });
+      }
+
+      if (request.query.stream === "true") {
+        const queryId = enqueueStreamJob({ sql, role, maskColumns: colsToMask });
+        reply.status(202);
+        return {
+          queryId,
+          status: "pending",
+          streamUrl: `/api/v1/queries/${queryId}/stream`
+        };
       }
 
       const queryId = randomUUID();
@@ -52,17 +67,16 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
           rows: cached.rows,
           nextUri: null,
           cacheHit: true,
-          maskColumns: role === "admin" ? [] : maskColumns
+          maskColumns: colsToMask
         };
       }
 
       try {
         metrics.totalQueries += 1;
-        // collectTrino pages through all Trino async results automatically
         const result: TrinoResult = await collectTrino(sql, 10);
         const durationMs = Date.now() - startedAt;
         const { columns } = result;
-        const maskedRows = maskRows(columns, result.rows, role);
+        const maskedRows = maskRows(columns, result.rows, role, colsToMask);
         const rowCount = maskedRows.length;
 
         setCached(key, { columns, rows: maskedRows, rowCount });
@@ -93,7 +107,7 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
           rows: maskedRows,
           nextUri: result.nextUri ?? null,
           cacheHit: false,
-          maskColumns: role === "admin" ? [] : maskColumns
+          maskColumns: colsToMask
         };
       } catch (err) {
         metrics.totalQueries += 1;
@@ -144,7 +158,7 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
     },
     async (request, reply) => {
       const { nextUri, columns: passedColumns } = request.body;
-      const role = getRole(request.headers as Record<string, unknown>);
+      const { role, maskColumns: colsToMask } = request.trace;
 
       if (!nextUri) {
         return reply
@@ -155,7 +169,7 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
       try {
         const payload = await fetchTrinoNext(nextUri);
         const columns = passedColumns ?? payload.columns ?? [];
-        const rows = maskRows(columns, payload.data ?? [], role);
+        const rows = maskRows(columns, payload.data ?? [], role, colsToMask);
         return { columns, rows, nextUri: payload.nextUri ?? null };
       } catch (err) {
         return reply.status(502).send({
@@ -182,10 +196,19 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
     },
     async (request, reply) => {
       const sql = (request.body.sql ?? "").trim();
+      const { role } = request.trace;
+
       if (!sql) {
         return reply
           .status(400)
           .send({ error: { code: "BAD_REQUEST", message: "sql is required" } });
+      }
+
+      const allowed = await evaluatePolicy({ role, action: "explain", sql });
+      if (!allowed) {
+        return reply
+          .status(403)
+          .send({ error: { code: "FORBIDDEN", message: "Explain blocked by policy" } });
       }
 
       const sourceId = activeSourceId;

@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { alerts, saveAlerts } from "../lib/store.js";
 import type { AlertRule } from "../lib/store.js";
 import { collectTrino } from "../lib/trino.js";
+import { evaluatePolicy } from "../lib/policy.js";
 
 export default async function alertRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get("/api/v1/alerts", async () => ({ items: alerts }));
@@ -27,6 +28,7 @@ export default async function alertRoutes(fastify: FastifyInstance): Promise<voi
     },
     async (request, reply) => {
       const { name, sql, comparison, threshold } = request.body;
+      const { role } = request.trace;
 
       if (!sql?.trim()) {
         return reply
@@ -42,6 +44,13 @@ export default async function alertRoutes(fastify: FastifyInstance): Promise<voi
         return reply
           .status(400)
           .send({ error: { code: "BAD_REQUEST", message: "threshold must be a number" } });
+      }
+
+      const allowed = await evaluatePolicy({ role, action: "query", sql: sql.trim() });
+      if (!allowed) {
+        return reply
+          .status(403)
+          .send({ error: { code: "FORBIDDEN", message: "Alert SQL blocked by policy" } });
       }
 
       const alert: AlertRule = {
@@ -71,10 +80,19 @@ export default async function alertRoutes(fastify: FastifyInstance): Promise<voi
     },
     async (request, reply) => {
       const alert = alerts.find((a) => a.id === request.params.id);
+      const { role } = request.trace;
+
       if (!alert) {
         return reply
           .status(404)
           .send({ error: { code: "NOT_FOUND", message: "Alert not found" } });
+      }
+
+      const allowed = await evaluatePolicy({ role, action: "query", sql: alert.sql });
+      if (!allowed) {
+        return reply
+          .status(403)
+          .send({ error: { code: "FORBIDDEN", message: "Alert SQL blocked by policy" } });
       }
 
       try {
