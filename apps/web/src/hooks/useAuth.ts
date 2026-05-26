@@ -11,7 +11,7 @@ type TokenSet = {
   expiresAt: number;
 };
 
-type AuthState =
+export type AuthState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "authenticated"; tokens: TokenSet }

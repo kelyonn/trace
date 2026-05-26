@@ -1,11 +1,25 @@
-import { useEffect, useState } from "react";
-import ThreePreview from "./ThreePreview";
-import CubeViewer from "./cube/CubeViewer";
+import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "./hooks/useAuth";
 import { useQueryStream } from "./hooks/useQueryStream";
+import { apiBase, apiOrigin } from "./config";
+import { canPivot, detectPivot } from "./cube/pivot";
+import { buildDrillSql, pivotContextFromClick } from "./cube/drill";
+import {
+  initialSql,
+  defaultQuickQuery,
+  quickQueryTemplates
+} from "./demo-queries";
+import AppShell from "./layout/AppShell";
+import ConnectionPanel from "./panels/ConnectionPanel";
+import SchemaPanel from "./panels/SchemaPanel";
+import BuildersPanel from "./panels/BuildersPanel";
+import QueryPanel from "./panels/QueryPanel";
+import ResultsPanel from "./panels/ResultsPanel";
+import GovernancePanel from "./panels/GovernancePanel";
+import AccessPanel from "./panels/AccessPanel";
+import type { StatusPayload } from "./panels/types";
 import type {
   QueryResponse,
-  StatusResponse,
   Column,
   HistoryItem,
   DataSource,
@@ -23,8 +37,6 @@ type QueryResult = Partial<QueryResponse> & {
   nextUri: string | null;
 };
 
-type StatusPayload = StatusResponse & { activeSourceId?: string | null };
-
 type ColumnInfo = Column;
 
 type Metrics = {
@@ -33,8 +45,6 @@ type Metrics = {
   cacheHits: number;
   exports: number;
 };
-
-const initialSql = "SELECT c.name, c.industry, o.amount, o.status FROM customers c JOIN orders o ON c.id = o.customer_id LIMIT 10;";
 
 const App = () => {
   const { state: authState, login, logout, accessToken } = useAuth();
@@ -50,7 +60,7 @@ const App = () => {
   const [tableColumns, setTableColumns] = useState<ColumnInfo[]>([]);
   const [plan, setPlan] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [quickQuery, setQuickQuery] = useState("orders_by_status");
+  const [quickQuery, setQuickQuery] = useState(defaultQuickQuery);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
@@ -75,9 +85,8 @@ const App = () => {
   const [selectedCube, setSelectedCube] = useState<SemanticCube | null>(null);
   const [selectedMeasure, setSelectedMeasure] = useState<string>("");
   const [selectedDimensions, setSelectedDimensions] = useState<string[]>([]);
-  const [cubeMode, setCubeMode] = useState(false);
+  const [cubeMode, setCubeMode] = useState(true);
 
-  const apiBase = "http://localhost:3000/api/v1";
 
   const getHeaders = () => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -258,14 +267,15 @@ const App = () => {
     return () => window.removeEventListener("trace:auth-complete", onAuthComplete);
   }, [accessToken]);
 
-  const runQuery = async () => {
+  const runQuery = async (overrideSql?: string) => {
+    const querySql = overrideSql ?? sql;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch(`${apiBase}/query`, {
         method: "POST",
         headers: getHeaders(),
-        body: JSON.stringify({ sql })
+        body: JSON.stringify({ sql: querySql })
       });
 
       if (!response.ok) {
@@ -275,11 +285,14 @@ const App = () => {
 
       const payload = (await response.json()) as QueryResult;
       setResult(payload);
+      if (canPivot(payload.columns, payload.rows)) {
+        setCubeMode(true);
+      }
       if (payload.queryId) {
         setHistory((prev) => [
           {
             id: payload.queryId as string,
-            sql,
+            sql: querySql,
             submittedAt: new Date().toISOString(),
             durationMs: payload.durationMs ?? 0,
             rowCount: payload.rowCount ?? 0,
@@ -298,19 +311,30 @@ const App = () => {
 
   const applyQuickQuery = (value: string) => {
     setQuickQuery(value);
-    const templates: Record<string, string> = {
-      orders_by_status:
-        "SELECT status, COUNT(*) AS order_count, SUM(amount) AS total_amount FROM orders GROUP BY status ORDER BY total_amount DESC;",
-      revenue_by_region:
-        "SELECT c.region, SUM(o.amount) AS total_amount FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY c.region ORDER BY total_amount DESC;",
-      top_customers:
-        "SELECT c.name, SUM(o.amount) AS total_amount FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY c.name ORDER BY total_amount DESC LIMIT 5;",
-      recent_orders:
-        "SELECT o.id, c.name, o.amount, o.status, o.order_date FROM orders o JOIN customers c ON c.id = o.customer_id ORDER BY o.order_date DESC LIMIT 10;"
-    };
-
-    setSql(templates[value] ?? sql);
+    setSql(quickQueryTemplates[value] ?? sql);
   };
+
+  const handleDrill = useCallback(
+    (rowLabel: string, colLabel: string) => {
+      const pivot = result ? detectPivot(result.columns, result.rows) : null;
+      if (!pivot) return;
+      const ctx = pivotContextFromClick(pivot, rowLabel, colLabel);
+      const drillSql = buildDrillSql(ctx, sql);
+      if (drillSql) {
+        setSql(drillSql);
+      }
+    },
+    [result, sql]
+  );
+
+  const runDemoQuery = useCallback(
+    (demoSql: string) => {
+      setSql(demoSql);
+      setQuickQuery("cube_by_status_region");
+      void runQuery(demoSql);
+    },
+    [sql, apiKey, role, accessToken, activeSourceId]
+  );
 
   const loadMore = async () => {
     if (!result?.nextUri) {
@@ -637,726 +661,145 @@ const App = () => {
   };
 
   return (
-    <main className="page">
-      <section className="hero">
-        <p className="eyebrow">Trace</p>
-        <h1>Live OLAP exploration with a 3-D edge.</h1>
-        <p className="subhead">
-          Run a query through Trino and inspect the results in a fast, minimal UI.
-        </p>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Access</h2>
-          <span className="muted">Optional API key + role</span>
-        </div>
-        <div className="access-grid">
-          <label>
-            API key
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(event) => {
-                const value = event.target.value;
-                setApiKey(value);
-                localStorage.setItem("trace_api_key", value);
-              }}
-              placeholder="Leave empty for local dev"
-            />
-          </label>
-          <label>
-            Role
-            <select
-              value={role}
-              onChange={(event) => {
-                const value = event.target.value;
-                setRole(value);
-                localStorage.setItem("trace_role", value);
-              }}
-            >
-              <option value="user">user</option>
-              <option value="admin">admin</option>
-            </select>
-          </label>
-        </div>
-        <div className="access-grid" style={{ marginTop: 12 }}>
-          {authState.status === "authenticated" ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <span className="pill ok">Signed in via Keycloak</span>
-              <button className="button ghost" onClick={logout}>Sign out</button>
-            </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <button className="button ghost" onClick={login}>
-                Sign in with Keycloak
-              </button>
-              <span className="muted">Optional — leave blank for local dev</span>
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Query runner</h2>
-          <div className="button-row">
-            <div className="select-wrapper">
-              <select
-                value={quickQuery}
-                onChange={(event) => applyQuickQuery(event.target.value)}
-              >
-                <option value="orders_by_status">Orders by status</option>
-                <option value="revenue_by_region">Revenue by region</option>
-                <option value="top_customers">Top customers</option>
-                <option value="recent_orders">Recent orders</option>
-              </select>
-            </div>
-            <button className="button ghost" onClick={explainQuery} disabled={loading}>
-              Explain
-            </button>
-            <button
-              className="button ghost"
-              onClick={() => runStream(sql, getHeaders())}
-              disabled={loading || streamState.status === "streaming"}
-            >
-              {streamState.status === "streaming" ? "Streaming..." : "Stream"}
-            </button>
-            {streamState.status === "streaming" ? (
-              <button className="button ghost" onClick={cancelStream}>
-                Cancel
-              </button>
-            ) : null}
-            <button className="button" onClick={runQuery} disabled={loading}>
-              {loading ? "Running..." : "Run query"}
-            </button>
-          </div>
-        </div>
-        <textarea
-          className="sql-input"
-          value={sql}
-          onChange={(event) => setSql(event.target.value)}
-          rows={5}
-        />
-        {error ? <p className="error">{error}</p> : null}
-        {plan ? (
-          <pre className="plan">{plan}</pre>
-        ) : null}
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Insight assistant</h2>
-          <button className="button ghost" onClick={runAssistant} disabled={loading}>
-            Summarize
-          </button>
-        </div>
-        {assistantSummary ? (
-          <div className="assistant-grid">
-            <div className="assistant-card">
-              <p className="status-title">Rows</p>
-              <p className="assistant-value">{assistantSummary.rowCount}</p>
-            </div>
-            <div className="assistant-card">
-              <p className="status-title">Columns</p>
-              <p className="assistant-value">{assistantSummary.columns.length}</p>
-            </div>
-            <div className="assistant-card wide">
-              <p className="status-title">Numeric stats</p>
-              {assistantSummary.numericStats.length ? (
-                <ul>
-                  {assistantSummary.numericStats.map((stat) => (
-                    <li key={stat.column}>
-                      <span>{stat.column}</span>
-                      <span className="muted">min {stat.min ?? "-"}, max {stat.max ?? "-"}, avg {stat.avg ?? "-"}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="muted">No numeric columns detected.</p>
-              )}
-            </div>
-          </div>
-        ) : (
-          <p className="muted">Run a summary to see quick stats.</p>
-        )}
-      </section>
-
-      <section className="panel split">
-        <div>
-          <div className="panel-header">
-            <h2>Connection status</h2>
-          </div>
-          {status ? (
-            <div className="status-grid">
-              <div className="status-card">
-                <p className="status-title">Trino</p>
-                <span className={status.trino.ok ? "pill ok" : "pill warn"}>
-                  {status.trino.ok ? "Online" : "Offline"}
-                </span>
-                <p className="status-meta">
-                  {status.trino.ok ? `v${status.trino.version ?? "unknown"}` : status.trino.error}
-                </p>
-              </div>
-              <div className="status-card">
-                <p className="status-title">Postgres</p>
-                <span className={status.postgres.ok ? "pill ok" : "pill warn"}>
-                  {status.postgres.ok ? "Online" : "Offline"}
-                </span>
-                <p className="status-meta">
-                  {status.postgres.ok ? "Ready" : status.postgres.error}
-                </p>
-              </div>
-            </div>
-          ) : (
-            <p className="muted">Checking services...</p>
-          )}
-          <div className="status-meta">
-            Active source: {activeSourceId ?? status?.activeSourceId ?? "none"}
-          </div>
-          {statusError ? <p className="error">{statusError}</p> : null}
-        </div>
-        <div>
-          <div className="panel-header">
-            <h2>Schema browser</h2>
-          </div>
-          <div className="schema-grid">
-            <div className="schema-list">
-              {schemaTables.length ? (
-                schemaTables.map((table) => (
-                  <button
-                    key={table}
-                    className={table === selectedTable ? "schema-item active" : "schema-item"}
-                    onClick={() => loadColumns(table)}
-                  >
-                    {table}
-                  </button>
-                ))
-              ) : (
-                <p className="muted">No tables found.</p>
-              )}
-            </div>
-            <div className="schema-detail">
-              {selectedTable ? (
-                <>
-                  <div className="schema-header">
-                    <p className="status-title">{selectedTable}</p>
-                    <button className="button ghost" onClick={previewTable} disabled={loading}>
-                      Preview
-                    </button>
-                  </div>
-                  {tableColumns.length ? (
-                    <ul>
-                      {tableColumns.map((column) => (
-                        <li key={`${selectedTable}-${column.name}`}>
-                          <span>{column.name}</span>
-                          <span className="muted">{column.type}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="muted">Loading columns...</p>
-                  )}
-                </>
-              ) : (
-                <p className="muted">Select a table to inspect columns.</p>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel split">
-        <div>
-          <div className="panel-header">
-            <h2>Data sources</h2>
-          </div>
-          <div className="source-list">
-            {dataSources.length ? (
-              dataSources.map((source) => (
-                <button
-                  key={source.id}
-                  className={source.id === activeSourceId ? "source-item active" : "source-item"}
-                  onClick={() => activateSource(source.id)}
-                >
-                  <div>
-                    <p className="status-title">{source.name}</p>
-                    <p className="status-meta">{source.type} · {source.status}</p>
-                  </div>
-                  <span className={source.id === activeSourceId ? "pill ok" : "pill warn"}>
-                    {source.id === activeSourceId
-                      ? "Active"
-                      : source.status === "auth_required"
-                      ? "Sign in"
-                      : "Select"}
-                  </span>
-                </button>
-              ))
-            ) : (
-              <p className="muted">No data sources configured.</p>
-            )}
-          </div>
-        </div>
-        <div>
-          <div className="panel-header">
-            <h2>Visual builder</h2>
-            <button className="button ghost" onClick={buildSql}>
-              Build SQL
-            </button>
-          </div>
-          <div className="builder">
-            <label>
-              Table
-              <select
-                value={builderTable ?? ""}
-                onChange={(event) => loadColumns(event.target.value)}
-              >
-                <option value="" disabled>
-                  Select a table
-                </option>
-                {schemaTables.map((table) => (
-                  <option key={table} value={table}>
-                    {table}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Limit
-              <input
-                type="number"
-                min={1}
-                value={builderLimit}
-                onChange={(event) => setBuilderLimit(Number(event.target.value))}
-              />
-            </label>
-            <div className="builder-columns">
-              {tableColumns.length ? (
-                tableColumns.map((column) => (
-                  <label key={column.name} className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={builderColumns.includes(column.name)}
-                      onChange={() => toggleColumn(column.name)}
-                    />
-                    <span>{column.name}</span>
-                  </label>
-                ))
-              ) : (
-                <p className="muted">Select a table to choose columns.</p>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {semanticModel && semanticModel.cubes.length > 0 ? (
-        <section className="panel">
-          <div className="panel-header">
-            <h2>Semantic builder</h2>
-            <button className="button ghost" onClick={buildSemanticSql}>
-              Generate SQL
-            </button>
-          </div>
-          <div className="builder">
-            <label>
-              Cube
-              <select
-                value={selectedCube?.name ?? ""}
-                onChange={(e) => {
-                  const cube = semanticModel.cubes.find((c) => c.name === e.target.value) ?? null;
-                  setSelectedCube(cube);
-                  setSelectedMeasure(cube?.measures?.[0]?.name ?? "");
-                  setSelectedDimensions([]);
-                }}
-              >
-                {semanticModel.cubes.map((c) => (
-                  <option key={c.name} value={c.name}>{c.name}</option>
-                ))}
-              </select>
-            </label>
-            {selectedCube ? (
-              <>
-                <label>
-                  Measure
-                  <select
-                    value={selectedMeasure}
-                    onChange={(e) => setSelectedMeasure(e.target.value)}
-                  >
-                    {selectedCube.measures.map((m) => (
-                      <option key={m.name} value={m.name}>
-                        {m.name} ({m.type})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div>
-                  <p className="status-title" style={{ marginBottom: 8 }}>Dimensions</p>
-                  <div className="builder-columns">
-                    {selectedCube.dimensions.map((d) => (
-                      <label key={d.name} className="checkbox">
-                        <input
-                          type="checkbox"
-                          checked={selectedDimensions.includes(d.name)}
-                          onChange={() =>
-                            setSelectedDimensions((prev) =>
-                              prev.includes(d.name)
-                                ? prev.filter((x) => x !== d.name)
-                                : [...prev, d.name]
-                            )
-                          }
-                        />
-                        <span>{d.name}</span>
-                        <span className="muted" style={{ marginLeft: 4 }}>{d.type}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Results</h2>
-          <div className="button-row">
-            {result ? (
-              <button
-                className={cubeMode ? "button" : "button ghost"}
-                onClick={() => setCubeMode((v) => !v)}
-              >
-                {cubeMode ? "Table view" : "Cube view"}
-              </button>
-            ) : null}
-            <button
-              className="button ghost"
-              disabled={!result || loading}
-              onClick={async () => {
-                if (!result) {
-                  return;
-                }
-                setExportStatus(null);
-                try {
-                  const response = await fetch(`${apiBase}/exports`, {
-                    method: "POST",
-                    headers: getHeaders(),
-                    body: JSON.stringify({ sql, format: "csv" })
-                  });
-                  if (!response.ok) {
-                    const payload = await response.json();
-                    throw new Error(payload?.error?.message ?? "Export failed");
-                  }
-                  const payload = (await response.json()) as { downloadUrl: string };
-                  window.open(`http://localhost:3000${payload.downloadUrl}`, "_blank");
-                  setExportStatus("Export ready");
-                } catch (err) {
-                  setExportStatus(err instanceof Error ? err.message : "Export failed");
-                }
-              }}
-            >
-              Export CSV
-            </button>
-            {result?.nextUri ? (
-              <button className="button ghost" onClick={loadMore} disabled={loading}>
-                Load more
-              </button>
-            ) : null}
-          </div>
-        </div>
-        {result ? (
-          <div>
-            <div className="meta-row">
-              <span>Rows: {result.rowCount ?? result.rows.length}</span>
-              <span>Duration: {result.durationMs ?? 0} ms</span>
-              <span>{result.cacheHit ? "Cache hit" : "Live query"}</span>
-              {result.maskColumns?.length ? (
-                <span>Masked: {result.maskColumns.join(", ")}</span>
-              ) : null}
-            </div>
-            {cubeMode ? (
-              <CubeViewer
-                columns={result.columns}
-                rows={result.rows}
-                onDrill={(row, col) => {
-                  const dim0 = result.columns[0]?.name;
-                  const dim1 = result.columns[1]?.name;
-                  if (dim0 && dim1) {
-                    setSql(
-                      `${sql.replace(/;?\s*$/, "")} -- drilled\nSELECT * FROM (${sql.replace(/;?\s*$/, "")}) t WHERE ${dim0} = '${row}' AND ${dim1} = '${col}';`
-                    );
-                  }
-                }}
-              />
-            ) : (
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      {result.columns.map((column) => (
-                        <th key={column.name}>{column.name}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.rows.map((row, rowIndex) => (
-                      <tr key={`${rowIndex}-${row.length}`}>
-                        {row.map((cell, cellIndex) => (
-                          <td key={`${rowIndex}-${cellIndex}`}>{String(cell)}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        ) : (
-          <p className="muted">Run a query to see results.</p>
-        )}
-        {exportStatus ? <p className="status-meta">{exportStatus}</p> : null}
-      </section>
-
-      {streamState.status !== "idle" ? (
-        <section className="panel">
-          <div className="panel-header">
-            <h2>Stream results</h2>
-            <span className="muted">
-              {streamState.status === "streaming"
-                ? `Streaming — ${streamState.rowCount} rows so far…`
-                : streamState.status === "complete"
-                ? `Complete — ${streamState.rowCount} rows in ${streamState.durationMs} ms`
-                : streamState.status === "error"
-                ? `Error`
-                : ""}
-            </span>
-          </div>
-          {streamState.status === "error" ? (
-            <p className="error">{streamState.message}</p>
-          ) : streamState.status === "streaming" || streamState.status === "complete" ? (
-            <div className="table-wrapper">
-              {streamState.status === "streaming" ? (
-                <div className="meta-row">
-                  <span className="pill warn">Live</span>
-                  <span>{streamState.rowCount} rows received</span>
-                </div>
-              ) : null}
-              <table>
-                <thead>
-                  <tr>
-                    {streamState.columns.map((col) => (
-                      <th key={col.name}>{col.name}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {streamState.rows.slice(0, 200).map((row, ri) => (
-                    <tr key={ri}>
-                      {(row as unknown[]).map((cell, ci) => (
-                        <td key={ci}>{String(cell)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {streamState.rows.length > 200 ? (
-                <p className="muted" style={{ marginTop: 8 }}>
-                  Showing first 200 of {streamState.rows.length} rows.
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      <section className="panel split">
-        <div>
-          <div className="panel-header">
-            <h2>Snapshots</h2>
-            <button className="button ghost" onClick={createSnapshot} disabled={loading}>
-              Save snapshot
-            </button>
-          </div>
-          {snapshots.length ? (
-            <div className="history-list">
-              {snapshots.map((snapshot) => (
-                <button
-                  key={snapshot.id}
-                  className="history-item"
-                  onClick={() => setSql(snapshot.sql)}
-                >
-                  <div>
-                    <p className="history-sql">{snapshot.name}</p>
-                    <p className="history-meta">{snapshot.summary}</p>
-                  </div>
-                  <span className="pill ok">Open</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="muted">No snapshots yet.</p>
-          )}
-        </div>
-        <div>
-          <div className="panel-header">
-            <h2>Notebook</h2>
-            <div className="button-row">
-              <button className="button ghost" onClick={createNotebook}>
-                New
-              </button>
-              <button className="button" onClick={saveNotebook}>
-                Save
-              </button>
-            </div>
-          </div>
-          <div className="notebook">
-            <label>
-              Title
-              <input
-                value={notebookTitle}
-                onChange={(event) => setNotebookTitle(event.target.value)}
-                placeholder="Notebook title"
-              />
-            </label>
-            <label>
-              Notes
-              <textarea
-                rows={6}
-                value={notebookContent}
-                onChange={(event) => setNotebookContent(event.target.value)}
-                placeholder="Write notes here..."
-              />
-            </label>
-            <div className="notebook-list">
-              {notebooks.map((item) => (
-                <button
-                  key={item.id}
-                  className={item.id === activeNotebookId ? "schema-item active" : "schema-item"}
-                  onClick={() => selectNotebook(item)}
-                >
-                  {item.title}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h2>3-D cube viewer</h2>
-          <span className="muted">
-            {result?.columns.length === 3
-              ? "Drag to rotate · scroll to zoom · click a bar to drill"
-              : "Run a 3-column query (dim, dim, measure) to enable the cube"}
-          </span>
-        </div>
-        {result && result.columns.length >= 3 ? (
-          <CubeViewer
-            columns={result.columns}
-            rows={result.rows}
-            onDrill={(row, col) => {
-              const dim0 = result.columns[0]?.name;
-              const dim1 = result.columns[1]?.name;
-              if (dim0 && dim1) {
-                setSql(`SELECT * FROM (${sql.replace(/;?\s*$/, "")}) t WHERE ${dim0} = '${row}' AND ${dim1} = '${col}';`);
-              }
-            }}
+    <AppShell
+      hero={
+        <>
+          <p className="eyebrow">Trace</p>
+          <h1>Live OLAP exploration with a 3-D edge.</h1>
+          <p className="subhead">
+            Explore millions of rows through Trino — pivot in 3D, drill into slices, and export results.
+          </p>
+        </>
+      }
+      left={
+        <>
+          <ConnectionPanel
+            status={status}
+            statusError={statusError}
+            activeSourceId={activeSourceId}
+            dataSources={dataSources}
+            onActivateSource={(id) => void activateSource(id)}
           />
-        ) : (
-          <ThreePreview metric={result?.rows.length ?? 0} />
-        )}
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Query history</h2>
-          {metrics ? (
-            <span className="muted">
-              Q: {metrics.totalQueries} · Errors: {metrics.queryErrors} · Cache: {metrics.cacheHits}
-            </span>
-          ) : null}
-        </div>
-        {history.length ? (
-          <div className="history-list">
-            {history.map((item) => (
-              <button
-                key={item.id}
-                className={item.status === "failed" ? "history-item warn" : "history-item"}
-                onClick={() => fillFromHistory(item)}
-              >
-                <div>
-                  <p className="history-sql">{item.sql}</p>
-                  <p className="history-meta">
-                    {new Date(item.submittedAt).toLocaleString()} · {item.durationMs} ms · {item.dataSourceId ?? "source"}
-                  </p>
-                </div>
-                <span className={item.status === "failed" ? "pill warn" : "pill ok"}>
-                  {item.status}
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="muted">No queries recorded yet.</p>
-        )}
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Alerts</h2>
-        </div>
-        <div className="alert-form">
-          <label>
-            Name
-            <input value={alertName} onChange={(event) => setAlertName(event.target.value)} />
-          </label>
-          <label>
-            Comparison
-            <select
-              value={alertComparison}
-              onChange={(event) => setAlertComparison(event.target.value as AlertRule["comparison"])}
-            >
-              <option value=">">&gt;</option>
-              <option value=">=">&gt;=</option>
-              <option value="<">&lt;</option>
-              <option value="<=">&lt;=</option>
-            </select>
-          </label>
-          <label>
-            Threshold
-            <input
-              type="number"
-              value={alertThreshold}
-              onChange={(event) => setAlertThreshold(Number(event.target.value))}
-            />
-          </label>
-          <button className="button" onClick={createAlert}>
-            Create alert
-          </button>
-        </div>
-        {alerts.length ? (
-          <div className="history-list">
-            {alerts.map((alert) => (
-              <div key={alert.id} className="history-item">
-                <div>
-                  <p className="history-sql">{alert.name}</p>
-                  <p className="history-meta">
-                    {alert.comparison} {alert.threshold} · Last: {alert.lastValue ?? "-"}
-                  </p>
-                </div>
-                <button className="button ghost" onClick={() => evaluateAlert(alert)}>
-                  Evaluate
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="muted">No alerts configured.</p>
-        )}
-      </section>
-    </main>
+          <SchemaPanel
+            schemaTables={schemaTables}
+            selectedTable={selectedTable}
+            tableColumns={tableColumns}
+            loading={loading}
+            onSelectTable={(t) => void loadColumns(t)}
+            onPreview={() => void previewTable()}
+          />
+          <BuildersPanel
+            semanticModel={semanticModel}
+            selectedCube={selectedCube}
+            selectedMeasure={selectedMeasure}
+            selectedDimensions={selectedDimensions}
+            schemaTables={schemaTables}
+            tableColumns={tableColumns}
+            builderTable={builderTable}
+            builderColumns={builderColumns}
+            builderLimit={builderLimit}
+            onCubeChange={(cube) => {
+              setSelectedCube(cube);
+              setSelectedMeasure(cube?.measures?.[0]?.name ?? "");
+              setSelectedDimensions([]);
+            }}
+            onMeasureChange={setSelectedMeasure}
+            onDimensionToggle={(dim) =>
+              setSelectedDimensions((prev) =>
+                prev.includes(dim) ? prev.filter((x) => x !== dim) : [...prev, dim]
+              )
+            }
+            onBuildSemanticSql={buildSemanticSql}
+            onBuilderTableChange={(t) => void loadColumns(t)}
+            onToggleColumn={toggleColumn}
+            onBuilderLimitChange={setBuilderLimit}
+            onBuildSql={buildSql}
+          />
+        </>
+      }
+      right={
+        <>
+          <QueryPanel
+            sql={sql}
+            quickQuery={quickQuery}
+            loading={loading}
+            error={error}
+            plan={plan}
+            streamState={streamState}
+            onSqlChange={setSql}
+            onQuickQueryChange={applyQuickQuery}
+            onExplain={() => void explainQuery()}
+            onStream={() => runStream(sql, getHeaders())}
+            onCancelStream={cancelStream}
+            onRun={() => void runQuery()}
+          />
+          <ResultsPanel
+            result={result}
+            sql={sql}
+            cubeMode={cubeMode}
+            loading={loading}
+            exportStatus={exportStatus}
+            apiOrigin={apiOrigin}
+            apiBase={apiBase}
+            headers={getHeaders()}
+            onToggleCubeMode={() => setCubeMode((v) => !v)}
+            onDrill={handleDrill}
+            onRunDemoQuery={runDemoQuery}
+            onLoadMore={() => void loadMore()}
+            onExportStatus={setExportStatus}
+          />
+        </>
+      }
+      governance={
+        <GovernancePanel
+          streamState={streamState}
+          assistantSummary={assistantSummary}
+          loading={loading}
+          history={history}
+          metrics={metrics}
+          snapshots={snapshots}
+          notebooks={notebooks}
+          activeNotebookId={activeNotebookId}
+          notebookTitle={notebookTitle}
+          notebookContent={notebookContent}
+          alerts={alerts}
+          alertName={alertName}
+          alertComparison={alertComparison}
+          alertThreshold={alertThreshold}
+          onRunAssistant={() => void runAssistant()}
+          onFillHistory={fillFromHistory}
+          onCreateSnapshot={() => void createSnapshot()}
+          onSetSql={setSql}
+          onCreateNotebook={() => void createNotebook()}
+          onSaveNotebook={() => void saveNotebook()}
+          onSelectNotebook={selectNotebook}
+          onNotebookTitleChange={setNotebookTitle}
+          onNotebookContentChange={setNotebookContent}
+          onAlertNameChange={setAlertName}
+          onAlertComparisonChange={setAlertComparison}
+          onAlertThresholdChange={setAlertThreshold}
+          onCreateAlert={() => void createAlert()}
+          onEvaluateAlert={(a) => void evaluateAlert(a)}
+        />
+      }
+      access={
+        <AccessPanel
+          apiKey={apiKey}
+          role={role}
+          authState={authState}
+          onApiKeyChange={(value) => {
+            setApiKey(value);
+            localStorage.setItem("trace_api_key", value);
+          }}
+          onRoleChange={(value) => {
+            setRole(value);
+            localStorage.setItem("trace_role", value);
+          }}
+          onLogin={() => void login()}
+          onLogout={logout}
+        />
+      }
+    />
   );
 };
 

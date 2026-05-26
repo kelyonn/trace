@@ -24,7 +24,34 @@ body {
   padding: 48px 8vw 80px;
   display: flex;
   flex-direction: column;
-  gap: 48px;
+  gap: 32px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(420px, 1.35fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.workspace-left,
+.workspace-right {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.workspace-right {
+  position: sticky;
+  top: 24px;
+}
+
+.workspace-governance {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
 }
 
 .hero {
@@ -82,10 +109,83 @@ h1 {
 
 .panel-header {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.panel-header h2 {
+  margin: 0;
+}
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  margin-left: auto;
+}
+
+.panel-step {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.panel-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.panel-details {
+  padding: 0;
+  overflow: hidden;
+}
+
+.panel-details-summary {
+  cursor: pointer;
+  padding: 20px 24px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.panel-details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel-details-body {
+  padding: 0 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.cube-viewer-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cube-toolbar {
+  display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cube-hover {
+  margin: 0;
+  font-size: 0.85rem;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--ink);
+}
+
+.cube-hint {
+  margin: 0;
+  font-size: 0.8rem;
 }
 
 .access-grid {
@@ -257,6 +357,19 @@ th {
   color: #b54708;
 }
 
+.demo-warning {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #fff4ec;
+  border: 1px solid #f3c2a4;
+}
+
+.demo-warning code {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.85rem;
+}
+
 .schema-grid {
   display: grid;
   grid-template-columns: minmax(140px, 180px) 1fr;
@@ -314,6 +427,10 @@ th {
   overflow: hidden;
   border: 1px solid #f1e4d7;
   background: #f8f3ec;
+}
+
+.canvas-shell-tall {
+  height: 400px;
 }
 
 .fallback-card {
@@ -516,6 +633,16 @@ th {
   padding: 10px 12px;
   font-size: 0.95rem;
   background: white;
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-right {
+    position: static;
+  }
 }
 
 @media (max-width: 720px) {
