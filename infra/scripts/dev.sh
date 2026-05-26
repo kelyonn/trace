@@ -4,8 +4,26 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root_dir"
 
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source .env
+  set +a
+  echo "Loaded .env"
+fi
+
 echo "Starting local infrastructure..."
 docker compose up -d
+
+if [[ "${SEED_LARGE:-true}" == "true" ]]; then
+  echo "Loading large demo dataset into Postgres (several minutes)..."
+  if ! "$root_dir/infra/scripts/seed-postgres.sh"; then
+    echo ""
+    echo "ERROR: Demo seed failed. The UI will be empty until you run:"
+    echo "  ./infra/scripts/seed-postgres.sh"
+    echo ""
+  fi
+fi
 
 if [[ ! -d node_modules ]]; then
   echo "Installing dependencies..."
