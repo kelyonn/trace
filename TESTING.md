@@ -5,7 +5,7 @@
 ```bash
 npm test                    # runs API + web tests
 npm -w apps/api run test    # API only (28 tests)
-npm -w apps/web run test    # Web only (6 pivot tests)
+npm -w apps/web run test    # Web only (pivot + drill tests)
 ```
 
 ### What is covered

@@ -73,6 +73,30 @@ bash infra/scripts/sanity_check.sh
 ./stop.sh
 ```
 
+## Demo database (large seed)
+
+On first `./run.sh`, Postgres schema is created and a large demo dataset is loaded by default (`SEED_LARGE=true`):
+
+- ~10,000 customers
+- ~500 products
+- ~1,000,000 orders
+- ~2,500,000 order lines
+
+**Reset and re-seed** (wipes the Docker volume):
+
+```bash
+docker compose -f infra/docker/docker-compose.yml down -v
+./run.sh
+```
+
+**Re-seed without wiping** (existing volume):
+
+```bash
+./infra/scripts/seed-postgres.sh
+```
+
+Seeding can take a few minutes. Set `SEED_LARGE=false` in `.env` or the environment to skip auto-seed on startup.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and adjust. Key variables:
@@ -89,6 +113,7 @@ See `.env.example` for the full list.
 
 ## Docs
 
+- [Product walkthrough (A–Z)](docs/PRODUCT_WALKTHROUGH.md)
 - [System design](docs/SYSTEM_DESIGN.md)
 - [API spec](docs/API_SPEC.md)
 - [Repo & CI/CD](docs/REPO_AND_CICD.md)
