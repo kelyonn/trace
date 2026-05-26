@@ -2,16 +2,20 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Column } from "@trace/shared-types";
-import { pivotRows, type PivotShape } from "./pivot";
+import { detectPivot, type PivotShape } from "./pivot";
+import { CUBE_BY_STATUS_REGION } from "../demo-queries";
 
 type Props = {
   columns: Column[];
   rows: unknown[][];
   onDrill?: (rowLabel: string, colLabel: string) => void;
+  onRunDemoQuery?: (sql: string) => void;
 };
 
+const CANVAS_HEIGHT = 400;
+const INSTANCED_THRESHOLD = 200;
+
 function heatColor(t: number): THREE.Color {
-  // Blue (cold) → Orange (hot) heatmap
   const r = t;
   const g = 0.3 * (1 - t) + 0.4 * t;
   const b = 0.8 * (1 - t);
@@ -25,7 +29,6 @@ function FallbackHeatmap({ pivot }: { pivot: PivotShape }) {
     if (!containerRef.current) return;
     const { rowLabels, colLabels, values, measureName, minValue, maxValue } = pivot;
 
-    // Build a Vega-Lite spec
     const data = rowLabels.flatMap((r, ri) =>
       colLabels.map((c, ci) => ({
         row: r,
@@ -54,7 +57,7 @@ function FallbackHeatmap({ pivot }: { pivot: PivotShape }) {
         ]
       },
       width: "container",
-      height: 240
+      height: 320
     };
 
     import("vega-embed").then(({ default: embed }) => {
@@ -66,23 +69,23 @@ function FallbackHeatmap({ pivot }: { pivot: PivotShape }) {
     });
   }, [pivot]);
 
-  return <div ref={containerRef} style={{ width: "100%", minHeight: 260 }} />;
+  return <div ref={containerRef} style={{ width: "100%", minHeight: 320 }} />;
 }
 
-const CubeViewer = ({ columns, rows, onDrill }: Props) => {
+const CubeViewer = ({ columns, rows, onDrill, onRunDemoQuery }: Props) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [fallback, setFallback] = useState(false);
+  const [use2d, setUse2d] = useState(false);
   const [pivot, setPivot] = useState<PivotShape | null>(null);
+  const [hover, setHover] = useState<string | null>(null);
 
   useEffect(() => {
-    const p = pivotRows(columns, rows);
-    setPivot(p);
-    setFallback(!p);
+    setPivot(detectPivot(columns, rows));
+    setUse2d(false);
   }, [columns, rows]);
 
   const handleClick = useCallback(
-    (e: MouseEvent, renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, meshes: THREE.Mesh[], labels: { row: string; col: string }[]) => {
-      if (!containerRef.current || !onDrill) return;
+    (e: MouseEvent, renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, meshes: THREE.Object3D[]) => {
+      if (!onDrill || !containerRef.current) return;
       const rect = renderer.domElement.getBoundingClientRect();
       const mouse = new THREE.Vector2(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -90,11 +93,13 @@ const CubeViewer = ({ columns, rows, onDrill }: Props) => {
       );
       const raycaster = new THREE.Raycaster();
       raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObjects(meshes);
+      const hits = raycaster.intersectObjects(meshes, true);
       if (hits.length > 0) {
-        const idx = meshes.indexOf(hits[0].object as THREE.Mesh);
-        if (idx >= 0 && labels[idx]) {
-          onDrill(labels[idx].row, labels[idx].col);
+        const obj = hits[0].object;
+        const row = obj.userData.row as string | undefined;
+        const col = obj.userData.col as string | undefined;
+        if (row !== undefined && col !== undefined) {
+          onDrill(row, col);
         }
       }
     },
@@ -102,19 +107,25 @@ const CubeViewer = ({ columns, rows, onDrill }: Props) => {
   );
 
   useEffect(() => {
-    if (!containerRef.current || !pivot) return;
+    if (!containerRef.current || !pivot || use2d) return;
 
     let renderer: THREE.WebGLRenderer | null = null;
     try {
       renderer = new THREE.WebGLRenderer({ antialias: true });
     } catch {
-      setFallback(true);
+      setUse2d(true);
       return;
     }
 
-    const { rowLabels, colLabels, values, minValue, maxValue } = pivot;
-    const width = containerRef.current.clientWidth || 600;
-    const height = 320;
+    const { rowLabels, colLabels, values, minValue, maxValue, rowDim, colDim, measureName } = pivot;
+    const cellCount = rowLabels.length * colLabels.length;
+
+    const getSize = () => ({
+      width: containerRef.current?.clientWidth || 600,
+      height: CANVAS_HEIGHT
+    });
+
+    let { width, height } = getSize();
 
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -125,125 +136,199 @@ const CubeViewer = ({ columns, rows, onDrill }: Props) => {
     scene.background = new THREE.Color("#f8f3ec");
 
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 500);
-    camera.position.set(rowLabels.length * 0.6, 6, colLabels.length * 1.2);
-    camera.lookAt(rowLabels.length * 0.3, 0, colLabels.length * 0.3);
+    const spanX = Math.max(rowLabels.length * 1.1, 4);
+    const spanZ = Math.max(colLabels.length * 1.1, 4);
+    camera.position.set(spanX * 0.5, Math.max(spanX, spanZ) * 0.8, spanZ * 1.2);
+    camera.lookAt(spanX * 0.4, 0, spanZ * 0.4);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
+    controls.target.set(spanX * 0.4, 0, spanZ * 0.4);
 
-    scene.add(new THREE.AmbientLight("#ffffff", 0.7));
-    const dirLight = new THREE.DirectionalLight("#fff3e0", 0.9);
-    dirLight.position.set(5, 10, 7);
+    scene.add(new THREE.AmbientLight("#ffffff", 0.75));
+    const dirLight = new THREE.DirectionalLight("#fff3e0", 0.95);
+    dirLight.position.set(spanX, spanZ * 1.5, spanZ);
     scene.add(dirLight);
 
-    const meshes: THREE.Mesh[] = [];
-    const drillLabels: { row: string; col: string }[] = [];
-    const range = maxValue - minValue || 1;
+    const gridHelper = new THREE.GridHelper(Math.max(spanX, spanZ) + 2, 10, "#d4c4b0", "#e8ddd0");
+    scene.add(gridHelper);
 
-    for (let ri = 0; ri < rowLabels.length; ri++) {
-      for (let ci = 0; ci < colLabels.length; ci++) {
-        const v = values[ri]?.[ci] ?? 0;
-        const t = (v - minValue) / range;
-        const barHeight = Math.max(0.05, t * 3);
-        const geo = new THREE.BoxGeometry(0.8, barHeight, 0.8);
-        const mat = new THREE.MeshStandardMaterial({
-          color: heatColor(t),
-          roughness: 0.4,
-          metalness: 0.05
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(ri * 1.1, barHeight / 2, ci * 1.1);
-        scene.add(mesh);
-        meshes.push(mesh);
-        drillLabels.push({ row: rowLabels[ri], col: colLabels[ci] });
+    const range = maxValue - minValue || 1;
+    const pickables: THREE.Object3D[] = [];
+    const barGeo = new THREE.BoxGeometry(0.85, 1, 0.85);
+
+    const placeBar = (ri: number, ci: number, barHeight: number, t: number) => {
+      const mat = new THREE.MeshStandardMaterial({
+        color: heatColor(t),
+        roughness: 0.35,
+        metalness: 0.08
+      });
+      const mesh = new THREE.Mesh(barGeo, mat);
+      mesh.scale.y = barHeight;
+      mesh.position.set(ri * 1.1, barHeight / 2, ci * 1.1);
+      mesh.userData = { row: rowLabels[ri], col: colLabels[ci], value: values[ri][ci] };
+      scene.add(mesh);
+      pickables.push(mesh);
+    };
+
+    if (cellCount > INSTANCED_THRESHOLD) {
+      const dummy = new THREE.Object3D();
+      const instanced = new THREE.InstancedMesh(
+        barGeo,
+        new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.08 }),
+        cellCount
+      );
+      let idx = 0;
+      for (let ri = 0; ri < rowLabels.length; ri++) {
+        for (let ci = 0; ci < colLabels.length; ci++) {
+          const v = values[ri]?.[ci] ?? 0;
+          const t = (v - minValue) / range;
+          const barHeight = Math.max(0.08, t * 3 + 0.1);
+          dummy.position.set(ri * 1.1, barHeight / 2, ci * 1.1);
+          dummy.scale.set(1, barHeight, 1);
+          dummy.updateMatrix();
+          instanced.setMatrixAt(idx, dummy.matrix);
+          instanced.setColorAt(idx, heatColor(t));
+          idx++;
+        }
+      }
+      instanced.instanceMatrix.needsUpdate = true;
+      if (instanced.instanceColor) instanced.instanceColor.needsUpdate = true;
+      scene.add(instanced);
+      pickables.push(instanced);
+
+      for (let ri = 0; ri < rowLabels.length; ri++) {
+        for (let ci = 0; ci < colLabels.length; ci++) {
+          const v = values[ri]?.[ci] ?? 0;
+          const t = (v - minValue) / range;
+          const barHeight = Math.max(0.08, t * 3 + 0.1);
+          const pick = new THREE.Mesh(
+            new THREE.BoxGeometry(0.85, barHeight, 0.85),
+            new THREE.MeshBasicMaterial({ visible: false })
+          );
+          pick.position.set(ri * 1.1, barHeight / 2, ci * 1.1);
+          pick.userData = { row: rowLabels[ri], col: colLabels[ci], value: v };
+          scene.add(pick);
+          pickables.push(pick);
+        }
+      }
+    } else {
+      for (let ri = 0; ri < rowLabels.length; ri++) {
+        for (let ci = 0; ci < colLabels.length; ci++) {
+          const v = values[ri]?.[ci] ?? 0;
+          const t = (v - minValue) / range;
+          const barHeight = Math.max(0.08, t * 3 + 0.1);
+          placeBar(ri, ci, barHeight, t);
+        }
       }
     }
 
-    // Click handler for drill-through
-    const onClick = (e: MouseEvent) => handleClick(e, renderer!, camera, meshes, drillLabels);
-    renderer.domElement.addEventListener("click", onClick);
-
-    let frameId = 0;
-    const startTime = performance.now();
-    let framesSinceMark = 0;
-    let lastFpsMark = startTime;
-    let fpsFailed = false;
-
-    const animate = () => {
-      frameId = requestAnimationFrame(animate);
-      framesSinceMark += 1;
-      const now = performance.now();
-      const elapsed = now - lastFpsMark;
-
-      if (elapsed >= 2000) {
-        const fps = (framesSinceMark / elapsed) * 1000;
-        framesSinceMark = 0;
-        lastFpsMark = now;
-        if (fps < 20 && now - startTime > 3000) {
-          fpsFailed = true;
+    const onClick = (e: MouseEvent) => handleClick(e, renderer!, camera, pickables);
+    const onMove = (e: MouseEvent) => {
+      const rect = renderer!.domElement.getBoundingClientRect();
+      const mouse = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1
+      );
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects(pickables, true);
+      if (hits.length > 0) {
+        const d = hits[0].object.userData;
+        if (d.row !== undefined) {
+          setHover(`${rowDim}: ${d.row} · ${colDim}: ${d.col} · ${measureName}: ${d.value}`);
+          return;
         }
       }
+      setHover(null);
+    };
 
-      if (fpsFailed) {
-        setFallback(true);
-        return;
-      }
+    renderer.domElement.addEventListener("click", onClick);
+    renderer.domElement.addEventListener("mousemove", onMove);
 
+    let frameId = 0;
+    const animate = () => {
+      frameId = requestAnimationFrame(animate);
       controls.update();
       renderer?.render(scene, camera);
     };
-
     animate();
 
-    const handleResize = () => {
+    const resizeObserver = new ResizeObserver(() => {
       if (!containerRef.current || !renderer) return;
-      const w = containerRef.current.clientWidth;
-      camera.aspect = w / height;
+      const next = getSize();
+      width = next.width;
+      height = next.height;
+      camera.aspect = width / height;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, height);
-    };
-    window.addEventListener("resize", handleResize);
+      renderer.setSize(width, height);
+    });
+    resizeObserver.observe(containerRef.current);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      resizeObserver.disconnect();
       renderer?.domElement.removeEventListener("click", onClick);
+      renderer?.domElement.removeEventListener("mousemove", onMove);
       cancelAnimationFrame(frameId);
       controls.dispose();
-      meshes.forEach((m) => {
-        m.geometry.dispose();
-        (m.material as THREE.Material).dispose();
+      barGeo.dispose();
+      scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry?.dispose();
+          const mat = obj.material;
+          if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+          else mat?.dispose();
+        }
       });
       renderer?.dispose();
       containerRef.current?.replaceChildren();
     };
-  }, [pivot, handleClick]);
+  }, [pivot, use2d, handleClick]);
 
-  if (!pivot && !fallback) {
+  if (!pivot) {
     return (
       <div className="fallback-card">
         <p className="status-title">Cube view unavailable</p>
         <p className="muted">
-          Run a query returning 3 columns: row dimension, column dimension, and a numeric measure.
-          Example: <code>SELECT status, region, SUM(amount) FROM orders JOIN customers … GROUP BY 1, 2</code>
+          Run a query with two dimensions and one numeric measure (e.g. status × region × total amount).
         </p>
+        {onRunDemoQuery ? (
+          <button
+            type="button"
+            className="button"
+            style={{ marginTop: 12 }}
+            onClick={() => onRunDemoQuery(CUBE_BY_STATUS_REGION)}
+          >
+            Run cube demo query
+          </button>
+        ) : null}
       </div>
     );
   }
 
-  if (fallback && pivot) {
-    return (
-      <div>
-        <div className="fallback-card" style={{ marginBottom: 8 }}>
-          <p className="status-title">2-D heatmap fallback</p>
-          <p className="muted">3-D rendering disabled or FPS too low.</p>
-        </div>
+  return (
+    <div className="cube-viewer-wrap">
+      <div className="cube-toolbar">
+        <span className="muted">
+          {pivot.rowDim} × {pivot.colDim} → {pivot.measureName}
+          {pivot.truncated
+            ? ` · showing top ${pivot.rowLabels.length}×${pivot.colLabels.length} of ${pivot.totalCells ?? "?"} cells`
+            : null}
+        </span>
+        <button type="button" className="button ghost" onClick={() => setUse2d((v) => !v)}>
+          {use2d ? "Show 3D" : "Switch to 2D heatmap"}
+        </button>
+      </div>
+      {hover ? <p className="cube-hover">{hover}</p> : null}
+      <p className="muted cube-hint">Drag to rotate · scroll to zoom · click a bar to drill</p>
+      {use2d ? (
         <FallbackHeatmap pivot={pivot} />
-      </div>
-    );
-  }
-
-  return <div className="canvas-shell" ref={containerRef} />;
+      ) : (
+        <div className="canvas-shell canvas-shell-tall" ref={containerRef} />
+      )}
+    </div>
+  );
 };
 
 export default CubeViewer;

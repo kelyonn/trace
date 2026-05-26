@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pivotRows } from "../cube/pivot";
+import { detectPivot, pivotRows, canPivot } from "../cube/pivot";
 
 const columns = [
   { name: "status", type: "varchar" },
@@ -15,9 +15,10 @@ const rows = [
   ["cancelled", "APAC", 0]
 ];
 
-describe("pivotRows", () => {
+describe("pivotRows / detectPivot", () => {
   it("returns null for insufficient columns", () => {
     expect(pivotRows([{ name: "a", type: "varchar" }], [[1, 2]])).toBeNull();
+    expect(detectPivot([{ name: "a", type: "varchar" }], [[1]])).toBeNull();
   });
 
   it("returns null for empty rows", () => {
@@ -51,5 +52,44 @@ describe("pivotRows", () => {
     expect(pivot.rowDim).toBe("status");
     expect(pivot.colDim).toBe("region");
     expect(pivot.measureName).toBe("total_amount");
+  });
+
+  it("aggregates duplicate row/col keys", () => {
+    const dupRows = [
+      ["shipped", "Europe", 100],
+      ["shipped", "Europe", 50]
+    ];
+    const pivot = detectPivot(columns, dupRows)!;
+    expect(pivot.values[pivot.rowLabels.indexOf("shipped")][pivot.colLabels.indexOf("Europe")]).toBe(150);
+  });
+
+  it("detects measure when 4 columns with extra field", () => {
+    const cols = [
+      { name: "status", type: "varchar" },
+      { name: "region", type: "varchar" },
+      { name: "note", type: "varchar" },
+      { name: "total_amount", type: "double" }
+    ];
+    const pivot = detectPivot(cols, [["shipped", "Europe", "x", 200]])!;
+    expect(pivot.measureName).toBe("total_amount");
+    expect(pivot.values[0][0]).toBe(200);
+  });
+
+  it("canPivot reflects detectPivot", () => {
+    expect(canPivot(columns, rows)).toBe(true);
+    expect(canPivot([{ name: "a", type: "varchar" }], rows)).toBe(false);
+  });
+
+  it("caps grid at 25x25 and sets truncated flag", () => {
+    const bigRows: unknown[][] = [];
+    for (let r = 0; r < 30; r++) {
+      for (let c = 0; c < 30; c++) {
+        bigRows.push([`r${r}`, `c${c}`, r * c]);
+      }
+    }
+    const pivot = detectPivot(columns, bigRows)!;
+    expect(pivot.rowLabels.length).toBeLessThanOrEqual(25);
+    expect(pivot.colLabels.length).toBeLessThanOrEqual(25);
+    expect(pivot.truncated).toBe(true);
   });
 });
