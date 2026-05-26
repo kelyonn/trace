@@ -9,7 +9,7 @@ export type StreamState =
   | { status: "complete"; columns: Column[]; rows: StreamRow[]; rowCount: number; durationMs: number }
   | { status: "error"; message: string };
 
-const API_BASE = "http://localhost:3000/api/v1";
+import { apiBase as API_BASE } from "../config";
 
 function streamUrl(queryId: string, bearerToken: string | null): string {
   const base = `${API_BASE}/queries/${queryId}/stream`;

@@ -111,6 +111,10 @@ export type StatusResponse = {
   activeSourceId: string;
   trino: { ok: boolean; version: string | null; error: string | null };
   postgres: { ok: boolean; error: string | null };
+  demo?: {
+    orderCount: number;
+    seeded: boolean;
+  };
 };
 
 export type AssistantSummary = {

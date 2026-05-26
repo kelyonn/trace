@@ -29,9 +29,16 @@ export default async function statusRoutes(fastify: FastifyInstance): Promise<vo
       trinoError = err instanceof Error ? err.message : "Trino check failed";
     }
 
+    let orderCount = 0;
     try {
       await collectTrino("SELECT 1", 1);
       postgresOk = true;
+      if (trinoOk) {
+        const countRows = await collectTrino("SELECT COUNT(*) AS c FROM orders", 30);
+        const raw = countRows.rows[0]?.[0];
+        orderCount = Number(raw ?? 0);
+        if (!Number.isFinite(orderCount)) orderCount = 0;
+      }
     } catch (err) {
       postgresError = err instanceof Error ? err.message : "Postgres check failed";
     }
@@ -39,7 +46,11 @@ export default async function statusRoutes(fastify: FastifyInstance): Promise<vo
     return {
       activeSourceId,
       trino: { ok: trinoOk, version: trinoVersion, error: trinoError },
-      postgres: { ok: postgresOk, error: postgresError }
+      postgres: { ok: postgresOk, error: postgresError },
+      demo: {
+        orderCount,
+        seeded: orderCount > 0
+      }
     };
   });
 
