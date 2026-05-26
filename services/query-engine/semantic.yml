@@ -50,3 +50,46 @@ cubes:
         sql: region
         type: string
         description: Geographic region
+
+  - name: products
+    sql: SELECT * FROM products
+    measures:
+      - name: avg_unit_price
+        sql: unit_price
+        type: avg
+        description: Average unit price
+      - name: product_count
+        sql: id
+        type: count
+        description: Number of products
+    dimensions:
+      - name: sku
+        sql: sku
+        type: string
+      - name: category
+        sql: category
+        type: string
+        description: Product category
+
+  - name: order_lines
+    sql: SELECT * FROM order_lines
+    joins:
+      - name: orders
+        sql: "{order_lines.order_id} = {orders.id}"
+        relationship: many_to_one
+      - name: products
+        sql: "{order_lines.product_id} = {products.id}"
+        relationship: many_to_one
+    measures:
+      - name: line_revenue
+        sql: line_amount
+        type: sum
+        description: Sum of line amounts
+      - name: units_sold
+        sql: quantity
+        type: sum
+        description: Total quantity sold
+    dimensions:
+      - name: order_id
+        sql: order_id
+        type: number
