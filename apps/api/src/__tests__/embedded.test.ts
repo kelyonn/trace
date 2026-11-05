@@ -43,18 +43,22 @@ describe("translateSql", () => {
   });
 });
 
-describe("embedded engine (PGlite)", () => {
-  let mod: typeof import("../lib/embedded.js");
+describe("demo source through the engine", () => {
+  let engine: typeof import("../lib/engine.js");
+  let sources: typeof import("../lib/sources.js");
 
   beforeAll(async () => {
     process.env.EMBEDDED_PERSIST = "false";
-    process.env.EMBEDDED_PAGE_SIZE = "1000";
-    mod = await import("../lib/embedded.js");
-    await mod.getEmbeddedDb(() => undefined);
+    process.env.PAGE_SIZE = "1000";
+    sources = await import("../lib/sources.js");
+    sources.__resetSources();
+    engine = await import("../lib/engine.js");
+    const { getEmbeddedDb } = await import("../lib/embedded.js");
+    await getEmbeddedDb(() => undefined);
   }, 120_000);
 
-  it("runs aggregate queries with Trino-style column metadata", async () => {
-    const page = await mod.embeddedStatement(
+  it("runs aggregate queries with common column metadata", async () => {
+    const page = await engine.fetchStatement(
       "SELECT c.region, SUM(o.amount) AS total_amount, COUNT(*) AS n FROM orders o JOIN customers c ON c.id = o.customer_id GROUP BY 1 ORDER BY 2 DESC"
     );
     expect(page.columns?.map((c) => c.type)).toEqual(["varchar", "decimal", "bigint"]);
@@ -63,19 +67,19 @@ describe("embedded engine (PGlite)", () => {
     expect(typeof page.data?.[0]?.[2]).toBe("number");
   });
 
-  it("pages large results through embedded:// next URIs", async () => {
-    const first = await mod.embeddedStatement("SELECT id FROM orders ORDER BY id LIMIT 2500");
+  it("pages large results through page:// cursors", async () => {
+    const first = await engine.fetchStatement("SELECT id FROM orders ORDER BY id LIMIT 2500");
     expect(first.data?.length).toBe(1000);
-    expect(first.nextUri?.startsWith(mod.EMBEDDED_URI_PREFIX)).toBe(true);
-    const second = await mod.embeddedNext(first.nextUri!);
-    const third = await mod.embeddedNext(second.nextUri!);
+    expect(first.nextUri?.startsWith(engine.PAGE_URI_PREFIX)).toBe(true);
+    const second = await engine.fetchNext(first.nextUri!);
+    const third = await engine.fetchNext(second.nextUri!);
     expect(third.data?.length).toBe(500);
     expect(third.nextUri).toBeUndefined();
   });
 
   it("rejects writes (read-only transactions)", async () => {
-    await expect(mod.embeddedStatement("DELETE FROM orders")).rejects.toThrow();
-    const count = await mod.embeddedStatement("SELECT COUNT(*) FROM orders");
+    await expect(engine.fetchStatement("DELETE FROM orders")).rejects.toThrow();
+    const count = await engine.fetchStatement("SELECT COUNT(*) FROM orders");
     expect(Number(count.data?.[0]?.[0])).toBeGreaterThan(0);
   });
 });

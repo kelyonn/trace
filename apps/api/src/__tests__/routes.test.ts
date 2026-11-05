@@ -3,20 +3,27 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { attachTraceHooks } from "../lib/request-context.js";
 
-vi.mock("../lib/trino.js", () => ({
-  fetchTrinoStatement: vi.fn().mockResolvedValue({
+vi.mock("../lib/engine.js", () => ({
+  fetchStatement: vi.fn().mockResolvedValue({
     columns: [{ name: "id", type: "integer" }],
     data: [[1]],
     nextUri: undefined
   }),
-  fetchTrinoNext: vi.fn().mockResolvedValue({ columns: [], data: [], nextUri: undefined }),
-  engineStatus: vi.fn().mockResolvedValue({ kind: "trino", mode: "auto", trinoVersion: "test", trinoError: null }),
-  embeddedInfo: vi.fn().mockReturnValue({ seeded: false, seedMs: 0, counts: {} }),
-  collectTrino: vi.fn().mockResolvedValue({
+  fetchNext: vi.fn().mockResolvedValue({ columns: [], data: [], nextUri: undefined }),
+  explainSql: vi.fn().mockResolvedValue("Seq Scan on orders"),
+  collect: vi.fn().mockResolvedValue({
     columns: [{ name: "count", type: "integer" }],
     rows: [[42]],
     nextUri: undefined
   })
+}));
+
+vi.mock("../lib/model-cache.js", () => ({
+  getTables: vi.fn().mockResolvedValue([
+    { name: "orders", rowCount: 10, primaryKey: ["id"], foreignKeys: [], columns: [{ name: "id", type: "integer", kind: "number" }] }
+  ]),
+  getModel: vi.fn(),
+  invalidateModels: vi.fn()
 }));
 
 vi.mock("../lib/store.js", async (importOriginal) => {

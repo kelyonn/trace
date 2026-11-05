@@ -4,7 +4,8 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 
 import { initStores } from "./lib/store.js";
-import { resolveEngine, getEmbeddedDb } from "./lib/trino.js";
+import { getEmbeddedDb } from "./lib/embedded.js";
+import { initSources, connectorFor } from "./lib/sources.js";
 import { attachTraceHooks } from "./lib/request-context.js";
 
 import statusRoutes from "./routes/status.js";
@@ -19,6 +20,7 @@ import snapshotRoutes from "./routes/snapshots.js";
 import alertRoutes from "./routes/alerts.js";
 import semanticRoutes from "./routes/semantic.js";
 import streamRoutes from "./routes/stream.js";
+import modelRoutes from "./routes/model.js";
 
 const rateLimitMax = Number(process.env.RATE_LIMIT_MAX ?? "0");
 
@@ -31,6 +33,21 @@ if (rateLimitMax > 0) {
 }
 
 await initStores();
+
+// ENGINE=trino|embedded|auto picks the initial source; users can hot-swap sources at runtime.
+const engineSetting = (process.env.ENGINE ?? "auto").toLowerCase();
+let initial: string | undefined;
+if (engineSetting === "trino") initial = "trino-local";
+else if (engineSetting === "embedded") initial = "demo";
+else {
+  try {
+    await connectorFor("trino-local").ping();
+    initial = "trino-local";
+  } catch {
+    /* fall back to the saved choice or the embedded demo */
+  }
+}
+await initSources(initial);
 
 await server.register(async (app) => {
   attachTraceHooks(app);
@@ -46,6 +63,7 @@ await server.register(async (app) => {
   await app.register(alertRoutes);
   await app.register(semanticRoutes);
   await app.register(streamRoutes);
+  await app.register(modelRoutes);
 });
 
 const host = process.env.HOST ?? "0.0.0.0";
@@ -53,14 +71,8 @@ const port = Number(process.env.PORT ?? "3000");
 
 try {
   await server.listen({ host, port });
-  const engine = await resolveEngine();
-  server.log.info(`query engine: ${engine}`);
-  if (engine === "embedded") {
-    // Warm up and seed in the background so the first query is fast.
-    getEmbeddedDb((msg) => server.log.info(msg)).catch((err) =>
-      server.log.error({ err }, "embedded engine failed to start")
-    );
-  }
+  // Warm up (and on first boot, seed) the embedded demo in the background.
+  getEmbeddedDb((msg) => server.log.info(msg)).catch((err) => server.log.error({ err }, "embedded demo failed to start"));
 } catch (err) {
   server.log.error(err);
   process.exit(1);

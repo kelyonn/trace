@@ -2,6 +2,7 @@ node_modules/
 .DS_Store
 .env
 .env.*
+!.env.example
 data/
 apps/api/dist/
 apps/web/dist/

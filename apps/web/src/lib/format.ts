@@ -28,10 +28,11 @@ export function formatNumber(n: number): string {
   return Number.isInteger(n) ? intFmt.format(n) : decFmt.format(n);
 }
 
-export function formatCurrency(n: number, compact = true): string {
+export function formatCurrency(n: number, compact = true, symbol = "$"): string {
   if (!Number.isFinite(n)) return "–";
-  if (compact && Math.abs(n) >= 1000) return `$${compactFmt.format(n)}`;
-  return `$${decFmt.format(n)}`;
+  const sign = n < 0 ? "−" : "";
+  const a = Math.abs(n);
+  return `${sign}${symbol}${compact && a >= 1000 ? compactFmt.format(a) : decFmt.format(a)}`;
 }
 
 export function isMoneyName(name: string): boolean {

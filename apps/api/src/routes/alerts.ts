@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "crypto";
 import { alerts, saveAlerts } from "../lib/store.js";
 import type { AlertRule } from "../lib/store.js";
-import { collectTrino } from "../lib/trino.js";
+import { collect } from "../lib/engine.js";
 import { evaluatePolicy } from "../lib/policy.js";
 
 export default async function alertRoutes(fastify: FastifyInstance): Promise<void> {
@@ -96,7 +96,7 @@ export default async function alertRoutes(fastify: FastifyInstance): Promise<voi
       }
 
       try {
-        const result = await collectTrino(alert.sql, 1);
+        const result = await collect(alert.sql, 1);
         const value = Number(result.rows?.[0]?.[0]);
         const finite = Number.isFinite(value);
 
@@ -115,7 +115,7 @@ export default async function alertRoutes(fastify: FastifyInstance): Promise<voi
       } catch (err) {
         return reply.status(502).send({
           error: {
-            code: "TRINO_ERROR",
+            code: "QUERY_ERROR",
             message: "Alert evaluation failed",
             details: err instanceof Error ? err.message : "Unknown error"
           }

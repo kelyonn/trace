@@ -7,25 +7,27 @@ Fastify API gateway and query orchestration layer.
 ```
 src/
   lib/
-    trino.ts      Trino REST client (fetchTrinoStatement, collectTrino)
-    store.ts      JSON-file persistence for history, audit, notebooks, snapshots, alerts
-    cache.ts      LRU + TTL query result cache
-    auth.ts       Role extraction, API key validation, column masking
-    policy.ts     OPA client + local policy enforcement (isSafeQuery)
-    state.ts      In-memory singletons (dataSources, exportJobs, metrics)
+    connectors/     Connector interface, dialects, and Postgres / MySQL / SQLite / Trino / PGlite drivers
+    sources.ts      Hot-swappable source registry (add, test, activate, remove; persisted to data/sources.json)
+    automodel.ts    Automatic semantic model + dialect-aware aggregate SQL
+    model-cache.ts  Per-source schema and model cache
+    engine.ts       Query facade over the active source with page:// cursors
+    embedded.ts     Built-in retail demo (PGlite) and its seeding
+    uploads.ts      CSV / JSON → typed tables in the files workspace
+    samples.ts      Generated fleet SQLite sample
+    store.ts        JSON-file persistence for history, audit, notebooks, snapshots, alerts
+    cache.ts        LRU + TTL result cache
+    auth.ts         Roles, API key / JWT validation, PII masking
+    policy.ts       OPA client + local policy enforcement
   routes/
-    status.ts     /health, /api/v1/status, /api/v1/metrics
-    query.ts      POST /api/v1/query, /api/v1/query/next, /api/v1/explain
-    schema.ts     GET /api/v1/schema
-    exports.ts    POST/GET /api/v1/exports
-    datasources.ts GET/POST /api/v1/data-sources
-    assistant.ts  POST /api/v1/assistant/summary
-    notebooks.ts  GET/POST/PUT /api/v1/notebooks
-    snapshots.ts  GET/POST /api/v1/snapshots
-    alerts.ts     GET/POST /api/v1/alerts, POST /api/v1/alerts/:id/evaluate
-    governance.ts GET /api/v1/history, /api/v1/audit
-  index.ts        Server bootstrap and plugin registration
-  __tests__/      Vitest test suite
+    datasources.ts  GET/POST /data-sources, POST /data-sources/test, DELETE /data-sources/:id,
+                    POST /data-sources/:id/activate, POST /data-sources/files/upload
+    model.ts        GET /model, POST /aggregate
+    query.ts        POST /query, /query/next, /explain
+    stream.ts       POST /queries, GET /queries/:id/stream (SSE)
+    schema.ts       GET /schema (?table=, ?full=true)
+    status.ts       /health, /status, /metrics
+    …               exports, assistant, notebooks, snapshots, alerts, governance
 ```
 
 ## Dev

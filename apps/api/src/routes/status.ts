@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { collectTrino, engineStatus, embeddedInfo } from "../lib/trino.js";
-import { activeSourceId, dataSources, metrics } from "../lib/state.js";
+import { metrics } from "../lib/state.js";
 import { queryHistory, auditEvents } from "../lib/store.js";
+import { activeConnector, activeSourceId, allSources, getSource, KIND_LABELS } from "../lib/sources.js";
+import { getTables } from "../lib/model-cache.js";
+import { embeddedInfo } from "../lib/embedded.js";
 
 export default async function statusRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get("/health", async () => ({ status: "ok" }));
@@ -9,35 +11,37 @@ export default async function statusRoutes(fastify: FastifyInstance): Promise<vo
   fastify.get("/api/v1/ping", async () => ({ message: "pong" }));
 
   fastify.get("/api/v1/status", async () => {
-    const engine = await engineStatus();
-    const trinoOk = engine.kind === "trino" && !engine.trinoError;
-    let postgresOk = false;
-    let postgresError: string | null = null;
-    let orderCount = 0;
-
+    const id = activeSourceId();
+    const src = getSource(id);
+    let ok = false;
+    let error: string | null = null;
+    let tables: { name: string; rowCount: number | null }[] = [];
     try {
-      const countRows = await collectTrino("SELECT COUNT(*) AS c FROM orders", 30);
-      postgresOk = true;
-      orderCount = Number(countRows.rows[0]?.[0] ?? 0);
-      if (!Number.isFinite(orderCount)) orderCount = 0;
+      await activeConnector().ping();
+      tables = (await getTables()).map((t) => ({ name: t.name, rowCount: t.rowCount }));
+      ok = true;
     } catch (err) {
-      postgresError = err instanceof Error ? err.message : "Postgres check failed";
+      error = err instanceof Error ? err.message : "Source unavailable";
     }
-
+    const totalRows = tables.reduce((a, t) => a + (t.rowCount ?? 0), 0);
+    const seeding = src?.kind === "demo" && !embeddedInfo().seeded;
     return {
-      activeSourceId,
-      engine: {
-        kind: engine.kind,
-        mode: engine.mode,
-        label: engine.kind === "trino" ? "Trino → Postgres" : "Embedded Postgres (PGlite)",
-        ...(engine.kind === "embedded" ? { dataset: embeddedInfo() } : {})
+      activeSourceId: id,
+      source: {
+        id,
+        name: src?.name ?? id,
+        kind: src?.kind ?? "demo",
+        kindLabel: src ? KIND_LABELS[src.kind] : "",
+        ok,
+        error,
+        seeding,
+        tables,
+        totalRows
       },
-      trino: { ok: trinoOk, version: engine.trinoVersion ?? null, error: engine.trinoError ?? null },
-      postgres: { ok: postgresOk, error: postgresError },
-      demo: {
-        orderCount,
-        seeded: orderCount > 0
-      }
+      // Back-compat fields consumed by older clients and the smoke test.
+      trino: { ok: src?.kind === "trino" && ok, version: null, error: src?.kind === "trino" ? error : null },
+      postgres: { ok, error },
+      demo: { orderCount: totalRows, seeded: ok && totalRows > 0 }
     };
   });
 
@@ -45,6 +49,6 @@ export default async function statusRoutes(fastify: FastifyInstance): Promise<vo
     ...metrics,
     historyCount: queryHistory.length,
     auditCount: auditEvents.length,
-    dataSourceCount: dataSources.length
+    dataSourceCount: allSources().length
   }));
 }

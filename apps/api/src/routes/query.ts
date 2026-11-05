@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "crypto";
-import { fetchTrinoNext, collectTrino, type TrinoResult } from "../lib/trino.js";
+import { fetchNext, collect, explainSql, type EngineResult } from "../lib/engine.js";
 import { addHistory, addAudit } from "../lib/store.js";
 import { makeCacheKey, getCached, setCached } from "../lib/cache.js";
 import { maskRows } from "../lib/auth.js";
 import { evaluatePolicy } from "../lib/policy.js";
-import { activeSourceId, metrics } from "../lib/state.js";
+import { metrics } from "../lib/state.js";
+import { activeSourceId } from "../lib/sources.js";
 import { enqueueStreamJob } from "../lib/stream-jobs.js";
 
 export default async function queryRoutes(fastify: FastifyInstance): Promise<void> {
@@ -52,7 +53,7 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
       }
 
       const queryId = randomUUID();
-      const sourceId = activeSourceId;
+      const sourceId = activeSourceId();
       const startedAt = Date.now();
       const key = makeCacheKey(sourceId, role, sql);
       const cached = getCached(key);
@@ -73,7 +74,7 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
 
       try {
         metrics.totalQueries += 1;
-        const result: TrinoResult = await collectTrino(sql, 10);
+        const result: EngineResult = await collect(sql, 10);
         const durationMs = Date.now() - startedAt;
         const { columns } = result;
         const maskedRows = maskRows(columns, result.rows, role, colsToMask);
@@ -127,7 +128,7 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
         });
 
         return reply.status(502).send({
-          error: { code: "TRINO_ERROR", message: "Trino request failed", details: message }
+          error: { code: "QUERY_ERROR", message: "Query failed", details: message }
         });
       }
     }
@@ -167,15 +168,15 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
       }
 
       try {
-        const payload = await fetchTrinoNext(nextUri);
+        const payload = await fetchNext(nextUri);
         const columns = passedColumns ?? payload.columns ?? [];
         const rows = maskRows(columns, payload.data ?? [], role, colsToMask);
         return { columns, rows, nextUri: payload.nextUri ?? null };
       } catch (err) {
         return reply.status(502).send({
           error: {
-            code: "TRINO_ERROR",
-            message: "Trino request failed",
+            code: "QUERY_ERROR",
+            message: "Query failed",
             details: err instanceof Error ? err.message : "Unknown error"
           }
         });
@@ -211,11 +212,10 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
           .send({ error: { code: "FORBIDDEN", message: "Explain blocked by policy" } });
       }
 
-      const sourceId = activeSourceId;
+      const sourceId = activeSourceId();
 
       try {
-        const result = await collectTrino(`EXPLAIN (TYPE DISTRIBUTED) ${sql}`, 2);
-        const plan = result.rows.map((row) => String(row[0])).join("\n");
+        const plan = await explainSql(sql);
         addAudit({
           id: randomUUID(),
           action: "explain",
@@ -227,7 +227,7 @@ export default async function queryRoutes(fastify: FastifyInstance): Promise<voi
       } catch (err) {
         return reply.status(502).send({
           error: {
-            code: "TRINO_ERROR",
+            code: "QUERY_ERROR",
             message: "Explain request failed",
             details: err instanceof Error ? err.message : "Unknown error"
           }

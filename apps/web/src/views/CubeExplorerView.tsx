@@ -1,41 +1,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Requester, QueryPayload } from "../lib/api";
-import { dim, MEASURES, measure as getMeasure, type MeasureKey } from "../cube/model";
+import type { Requester } from "../lib/api";
 import {
   AXES,
-  HIERARCHIES,
   OTHER,
-  assignHierarchy,
   buildGrid,
-  buildOlapSql,
   canDrill,
   canRollUp,
   collapse,
   drillAxis,
-  levelOf,
+  olapRequest,
   pivotAxes,
   rollUpAxis,
+  setAxisDim,
   type AxisKey,
-  type HierarchyKey,
   type OlapState
 } from "../cube/olap";
+import { aggregate, groupedDims, measureFormatter, type AggregateResult, type AutoModel } from "../lib/model";
 import CubeScene, { type CameraPreset, type Cell, type Slice } from "../cube/CubeScene";
-import { formatCompact, formatCurrency, formatDuration, formatNumber } from "../lib/format";
+import { formatDuration, formatNumber } from "../lib/format";
 import { tokenizeSql } from "../components/SqlEditor";
 import Icon from "../components/Icon";
 
 type Props = {
   request: Requester;
   theme: string;
+  model: AutoModel;
   state: OlapState;
   onStateChange: (s: OlapState) => void;
+  onFactChange: (table: string) => void;
   onOpenSql: (sql: string) => void;
 };
 
 const AXIS_NAME: Record<AxisKey, string> = { x: "X", y: "Y", z: "Z" };
 
-const CubeExplorerView = ({ request, theme, state, onStateChange, onOpenSql }: Props) => {
-  const [result, setResult] = useState<QueryPayload | null>(null);
+const CubeExplorerView = ({ request, theme, model, state, onStateChange, onFactChange, onOpenSql }: Props) => {
+  const [result, setResult] = useState<AggregateResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [hidden, setHidden] = useState<Record<AxisKey, Set<string>>>({ x: new Set(), y: new Set(), z: new Set() });
@@ -49,23 +48,25 @@ const CubeExplorerView = ({ request, theme, state, onStateChange, onOpenSql }: P
   const [showSql, setShowSql] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
 
-  const sql = useMemo(() => buildOlapSql(state), [state]);
-  const m = getMeasure(state.measure);
-  const fmt = useCallback((n: number) => (m.money ? formatCurrency(n) : formatCompact(n)), [m.money]);
-  const fmtFull = (n: number) => (m.money ? formatCurrency(n, false) : formatNumber(n));
+  const dimOf = useCallback((key: string) => model.dimensions.find((d) => d.key === key), [model]);
+  const reqKey = useMemo(() => JSON.stringify(olapRequest(state)), [state]);
+  const sql = result?.sql ?? "";
+  const m = model.measures.find((x) => x.key === state.measure) ?? model.measures[0];
+  const fmt = useMemo(() => measureFormatter(m), [m]);
+  const fmtFull = useMemo(() => measureFormatter(m, false), [m]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    request<QueryPayload>("/query", { body: { sql } })
+    aggregate(request, JSON.parse(reqKey))
       .then((r) => !cancelled && setResult(r))
       .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "Query failed"))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [sql, request]);
+  }, [reqKey, request]);
 
   // Reset client-side slice/dice/selection whenever the server cube changes shape.
   useEffect(() => {
@@ -73,16 +74,17 @@ const CubeExplorerView = ({ request, theme, state, onStateChange, onOpenSql }: P
     setSlice(null);
     setSelected(null);
     setPlaying(false);
-  }, [sql]);
+  }, [reqKey]);
 
   const grid = useMemo(() => {
     if (!result) return null;
     return buildGrid(result.rows, {
-      x: !!HIERARCHIES[state.x.hier].ordered,
-      y: !!HIERARCHIES[state.y.hier].ordered,
-      z: !!HIERARCHIES[state.z.hier].ordered
+      x: dimOf(state.x.dim)?.kind === "time",
+      y: dimOf(state.y.dim)?.kind === "time",
+      z: dimOf(state.z.dim)?.kind === "time"
     });
-  }, [result, state.x.hier, state.y.hier, state.z.hier]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result]);
 
   const visible = useMemo(() => {
     const v = {} as Record<AxisKey, boolean[]>;
@@ -91,9 +93,8 @@ const CubeExplorerView = ({ request, theme, state, onStateChange, onOpenSql }: P
   }, [grid, hidden]);
 
   const titles = useMemo(
-    () =>
-      Object.fromEntries(AXES.map((k) => [k, dim(levelOf(state[k])).label])) as Record<AxisKey, string>,
-    [state]
+    () => Object.fromEntries(AXES.map((k) => [k, dimOf(state[k].dim)?.label ?? state[k].dim])) as Record<AxisKey, string>,
+    [state, dimOf]
   );
 
   // Slice playback: sweep the slice plane through members of its axis.
@@ -122,8 +123,8 @@ const CubeExplorerView = ({ request, theme, state, onStateChange, onOpenSql }: P
     let changed = false;
     for (const k of AXES) {
       const member = grid.members[k][c[k]];
-      if (member.key !== OTHER && canDrill(next[k])) {
-        next = drillAxis(next, k, member.key);
+      if (member.key !== OTHER && canDrill(model, next[k])) {
+        next = drillAxis(next, model, k, member.key);
         changed = true;
       }
     }
@@ -228,58 +229,89 @@ const CubeExplorerView = ({ request, theme, state, onStateChange, onOpenSql }: P
       <aside className="olap-rail">
         <div className="rail-section">
           <div className="section-label">Measure</div>
-          <select value={state.measure} onChange={(e) => onStateChange({ ...state, measure: e.target.value as MeasureKey })}>
-            {MEASURES.map((mm) => (
+          <select value={state.measure} onChange={(e) => onStateChange({ ...state, measure: e.target.value })}>
+            {model.measures.map((mm) => (
               <option key={mm.key} value={mm.key}>
                 {mm.label}
               </option>
             ))}
           </select>
+          {model.factCandidates.length > 1 ? (
+            <>
+              <div className="section-label" style={{ marginTop: 4 }}>
+                Fact table
+              </div>
+              <select value={model.fact.table} onChange={(e) => onFactChange(e.target.value)}>
+                {model.factCandidates.map((f) => (
+                  <option key={f.table} value={f.table}>
+                    {f.table}
+                    {f.rowCount !== null ? ` · ${formatNumber(f.rowCount)} rows` : ""}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
         </div>
 
         {AXES.map((k) => {
           const a = state[k];
-          const h = HIERARCHIES[a.hier];
+          const current = dimOf(a.dim);
+          const future: string[] = [];
+          let nx = current?.next ?? null;
+          while (nx && future.length < 4) {
+            future.push(dimOf(nx)?.label ?? nx);
+            nx = dimOf(nx)?.next ?? null;
+          }
           const hiddenCount = hidden[k].size;
           return (
             <div className="rail-section" key={k}>
               <div className="axis-head">
                 <span className={`axis-chip axis-${k}`}>{AXIS_NAME[k]}</span>
                 <select
-                  value={a.hier}
-                  aria-label={`${AXIS_NAME[k]} axis hierarchy`}
-                  onChange={(e) => onStateChange(assignHierarchy(state, k, e.target.value as HierarchyKey))}
+                  value={a.pins[0]?.dim ?? a.dim}
+                  aria-label={`${AXIS_NAME[k]} axis dimension`}
+                  onChange={(e) => onStateChange(setAxisDim(state, k, e.target.value))}
                 >
-                  {(Object.keys(HIERARCHIES) as HierarchyKey[]).map((hk) => (
-                    <option key={hk} value={hk}>
-                      {HIERARCHIES[hk].label}
-                    </option>
+                  {groupedDims(model).map((g) => (
+                    <optgroup key={g.label} label={g.label}>
+                      {g.dims.map((d) => (
+                        <option key={d.key} value={d.key}>
+                          {d.label}
+                          {d.cardinality && d.kind === "category" ? ` (${d.cardinality})` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               </div>
               <div className="level-path">
-                {h.levels.map((lvl, i) => {
-                  const active = i === a.depth;
-                  const reachable = i <= a.depth;
-                  return (
-                    <span key={lvl} className="level-step">
-                      {i > 0 ? <span className="sep">/</span> : null}
-                      <button
-                        type="button"
-                        disabled={!reachable || active}
-                        className={active ? "level active" : reachable ? "level" : "level future"}
-                        title={reachable && !active ? `Roll up to ${dim(lvl).label}` : undefined}
-                        onClick={() => {
-                          let next = state;
-                          while (next[k].depth > i) next = rollUpAxis(next, k);
-                          onStateChange(next);
-                        }}
-                      >
-                        {i < a.depth ? a.path[i] : dim(lvl).label}
-                      </button>
-                    </span>
-                  );
-                })}
+                {a.pins.map((p, i) => (
+                  <span key={`${p.dim}-${i}`} className="level-step">
+                    {i > 0 ? <span className="sep">/</span> : null}
+                    <button
+                      type="button"
+                      className="level"
+                      title={`Roll up to ${dimOf(p.dim)?.label ?? p.dim}`}
+                      onClick={() => {
+                        let next = state;
+                        while (next[k].pins.length > i) next = rollUpAxis(next, k);
+                        onStateChange(next);
+                      }}
+                    >
+                      {p.value}
+                    </button>
+                  </span>
+                ))}
+                <span className="level-step">
+                  {a.pins.length ? <span className="sep">/</span> : null}
+                  <span className="level active">{current?.label ?? a.dim}</span>
+                </span>
+                {future.map((f) => (
+                  <span key={f} className="level-step">
+                    <span className="sep">/</span>
+                    <span className="level future">{f}</span>
+                  </span>
+                ))}
               </div>
               <div className="axis-actions">
                 <button type="button" className="btn" disabled={!canRollUp(a)} onClick={() => onStateChange(rollUpAxis(state, k))}>
@@ -290,11 +322,7 @@ const CubeExplorerView = ({ request, theme, state, onStateChange, onOpenSql }: P
                   {hiddenCount ? (
                     <>
                       {" · "}
-                      <button
-                        type="button"
-                        className="link"
-                        onClick={() => setHidden((hh) => ({ ...hh, [k]: new Set() }))}
-                      >
+                      <button type="button" className="link" onClick={() => setHidden((hh) => ({ ...hh, [k]: new Set() }))}>
                         show {hiddenCount} hidden
                       </button>
                     </>
@@ -474,7 +502,7 @@ const CubeExplorerView = ({ request, theme, state, onStateChange, onOpenSql }: P
           <span>Σ visible {fmt(visibleTotal)}</span>
         </div>
 
-        {showSql ? (
+        {showSql && sql ? (
           <div className="stage-sql">
             <pre>
               {tokenizeSql(sql).map((t, i) =>
@@ -613,15 +641,15 @@ const CubeExplorerView = ({ request, theme, state, onStateChange, onOpenSql }: P
               </button>
               {AXES.map((k) => {
                 const mem = grid.members[k][sel.c[k]];
-                const ok = canDrill(state[k]) && mem.key !== OTHER;
-                const next = ok ? dim(HIERARCHIES[state[k].hier].levels[state[k].depth + 1]).label : null;
+                const ok = canDrill(model, state[k]) && mem.key !== OTHER;
+                const next = ok ? dimOf(dimOf(state[k].dim)?.next ?? "")?.label : null;
                 return (
                   <button
                     key={`d${k}`}
                     type="button"
                     className="btn"
                     disabled={!ok}
-                    onClick={() => onStateChange(drillAxis(state, k, mem.key))}
+                    onClick={() => onStateChange(drillAxis(state, model, k, mem.key))}
                   >
                     Drill {AXIS_NAME[k]}: {mem.label} → {next ?? "leaf"}
                   </button>

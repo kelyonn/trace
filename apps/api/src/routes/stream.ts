@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "crypto";
-import { fetchTrinoStatement, fetchTrinoNext } from "../lib/trino.js";
+import { fetchStatement, fetchNext } from "../lib/engine.js";
 import { addHistory, addAudit } from "../lib/store.js";
 import { maskRows } from "../lib/auth.js";
 import { evaluatePolicy } from "../lib/policy.js";
-import { activeSourceId, metrics } from "../lib/state.js";
+import { metrics } from "../lib/state.js";
+import { activeSourceId } from "../lib/sources.js";
 import { pendingQueries, enqueueStreamJob } from "../lib/stream-jobs.js";
 
 export default async function streamRoutes(fastify: FastifyInstance): Promise<void> {
@@ -68,7 +69,7 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
 
       pendingQueries.delete(id);
       const { sql, role, maskColumns: colsToMask } = job;
-      const sourceId = activeSourceId;
+      const sourceId = activeSourceId();
 
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -87,7 +88,7 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
       let columns: { name: string; type: string }[] = [];
 
       try {
-        const first = await fetchTrinoStatement(sql);
+        const first = await fetchStatement(sql);
         columns = first.columns ?? [];
         const maskedRows = maskRows(columns, first.data ?? [], role, colsToMask);
         totalRows += maskedRows.length;
@@ -102,7 +103,7 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
         let pageCount = 1;
 
         while (nextUri && pageCount < maxPages) {
-          const next = await fetchTrinoNext(nextUri);
+          const next = await fetchNext(nextUri);
           if (next.columns?.length && columns.length === 0) {
             columns = next.columns;
           }
@@ -141,7 +142,7 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
         const durationMs = Date.now() - startedAt;
         const message = err instanceof Error ? err.message : "Unknown error";
 
-        send("error", { code: "TRINO_ERROR", message });
+        send("error", { code: "QUERY_ERROR", message });
 
         addHistory({
           id,

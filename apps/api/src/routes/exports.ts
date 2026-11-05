@@ -2,10 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
-import { collectTrino } from "../lib/trino.js";
+import { collect } from "../lib/engine.js";
 import { dataDir } from "../lib/store.js";
 import { evaluatePolicy } from "../lib/policy.js";
-import { activeSourceId, exportJobs, metrics } from "../lib/state.js";
+import { exportJobs, metrics } from "../lib/state.js";
+import { activeSourceId } from "../lib/sources.js";
 
 export default async function exportRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post<{ Body: { sql?: string; format?: string } }>(
@@ -57,7 +58,7 @@ export default async function exportRoutes(fastify: FastifyInstance): Promise<vo
 
       try {
         metrics.exports += 1;
-        const result = await collectTrino(sql, 5);
+        const result = await collect(sql, 5);
         const header = result.columns.map((col) => col.name).join(",");
         const lines = result.rows.map((row) =>
           row
@@ -97,7 +98,7 @@ export default async function exportRoutes(fastify: FastifyInstance): Promise<vo
         };
         return reply.status(502).send({
           error: {
-            code: "TRINO_ERROR",
+            code: "QUERY_ERROR",
             message: "Export failed",
             details: err instanceof Error ? err.message : "Unknown error"
           }
