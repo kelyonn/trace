@@ -3,15 +3,13 @@ import type { AlertRule, AssistantSummary, DataSource, HistoryItem, Notebook, Sn
 import { useAuth } from "./hooks/useAuth";
 import { useQueryStream } from "./hooks/useQueryStream";
 import { apiOrigin } from "./config";
-import { detectPivot } from "./cube/pivot";
-import { buildDrillSql, pivotContextFromClick } from "./cube/drill";
-import { DEFAULT_CUBE, type CubeState } from "./cube/model";
+import { DEFAULT_OLAP, type OlapState } from "./cube/olap";
 import { initialSql } from "./demo-queries";
 import { makeRequester, type QueryPayload } from "./lib/api";
 import AppShell, { type ViewKey, VIEWS } from "./layout/AppShell";
 import OverviewView from "./views/OverviewView";
 import ExploreView from "./views/ExploreView";
-import CubeStudioView from "./views/CubeStudioView";
+import CubeExplorerView from "./views/CubeExplorerView";
 import ActivityView, { type Metrics } from "./views/ActivityView";
 import SettingsView from "./views/SettingsView";
 import Icon from "./components/Icon";
@@ -65,7 +63,7 @@ const App = () => {
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [alerts, setAlerts] = useState<AlertRule[]>([]);
   const [assistant, setAssistant] = useState<AssistantSummary | null>(null);
-  const [cubeState, setCubeState] = useState<CubeState>(DEFAULT_CUBE);
+  const [olap, setOlap] = useState<OlapState>(DEFAULT_OLAP);
   const [refreshKey, setRefreshKey] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -211,8 +209,8 @@ const App = () => {
   );
 
   const openCube = useCallback(
-    (state?: CubeState) => {
-      if (state) setCubeState(state);
+    (state?: Partial<OlapState>) => {
+      if (state) setOlap({ ...DEFAULT_OLAP, ...state });
       navigate("cube");
     },
     [navigate]
@@ -256,18 +254,6 @@ const App = () => {
       toast("ok", "Export ready — download started");
     } catch (err) {
       toast("bad", err instanceof Error ? err.message : "Export failed");
-    }
-  };
-
-  const handleDrill = (rowLabel: string, colLabel: string) => {
-    const pivot = result ? detectPivot(result.columns, result.rows) : null;
-    if (!pivot) return;
-    const drillSql = buildDrillSql(pivotContextFromClick(pivot, rowLabel, colLabel), sql);
-    if (drillSql) {
-      setSql(drillSql);
-      toast("info", `Drill-through SQL for ${rowLabel} · ${colLabel} is in the editor`);
-    } else {
-      toast("info", "Open Cube Studio for multi-level drill-down on this shape");
     }
   };
 
@@ -380,7 +366,6 @@ const App = () => {
   });
 
   const engineOk = status ? status.postgres.ok : null;
-  const activeSource = dataSources.find((s) => s.id === (activeSourceId ?? status?.activeSourceId));
   const seeding = status && !status.demo?.seeded && status.engine?.kind === "embedded";
 
   return (
@@ -391,27 +376,27 @@ const App = () => {
       onToggleTheme={toggleTheme}
       engineLabel={status?.engine?.label ?? (status ? (status.trino.ok ? "Trino" : "Engine offline") : undefined)}
       engineOk={engineOk}
-      role={role}
-      activeSourceName={activeSource?.name}
       historyCount={history.length}
       topActions={
-        <div className="segmented" title="Role (drives masking and policy)">
+        <div className="seg" role="group" aria-label="Role" title="Role drives OPA policy and PII masking">
           {["user", "admin"].map((r) => (
             <button
               key={r}
               type="button"
-              className={role === r ? "active" : ""}
+              className={role === r ? "on" : ""}
               onClick={() => {
                 setRole(r);
                 store.set("trace_role", r);
               }}
             >
-              <Icon name={r === "admin" ? "key" : "users"} /> {r}
+              {r}
             </button>
           ))}
         </div>
       }
     >
+      {seeding || (status && !status.postgres.ok) ? (
+        <div className="page" style={{ paddingBottom: 0 }}>
       {seeding ? (
         <div className="banner info">
           <span className="spinner" />
@@ -428,6 +413,8 @@ const App = () => {
             <p className="status-title">The query engine is unavailable</p>
             <p className="muted">{status.postgres.error ?? "Start the API, or set ENGINE=embedded to run without Docker."}</p>
           </div>
+        </div>
+      ) : null}
         </div>
       ) : null}
 
@@ -459,15 +446,14 @@ const App = () => {
           onLoadMore={() => void loadMore()}
           onExport={() => void exportCsv()}
           onSnapshot={() => void createSnapshot()}
-          onDrill={handleDrill}
         />
       ) : null}
       {view === "cube" ? (
-        <CubeStudioView
+        <CubeExplorerView
           request={request}
           theme={theme}
-          state={cubeState}
-          onStateChange={setCubeState}
+          state={olap}
+          onStateChange={setOlap}
           onOpenSql={(q) => openSql(q)}
         />
       ) : null}
@@ -516,7 +502,6 @@ const App = () => {
       <div className="toast-stack" aria-live="polite">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.kind}`}>
-            <Icon name={t.kind === "ok" ? "check" : t.kind === "bad" ? "alert" : "info"} />
             {t.text}
           </div>
         ))}

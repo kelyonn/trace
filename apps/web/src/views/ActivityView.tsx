@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import type { AlertRule, AssistantSummary, AuditEvent, HistoryItem, Notebook, Snapshot } from "@trace/shared-types";
 import type { Requester } from "../lib/api";
 import { formatDuration, formatNumber, relativeTime } from "../lib/format";
-import Icon from "../components/Icon";
 
 export type Metrics = {
   totalQueries: number;
@@ -30,13 +29,6 @@ type Props = {
   onEvaluateAlert: (a: AlertRule) => void;
 };
 
-const ACTION_ICON: Record<string, string> = {
-  query: "play",
-  schema: "database",
-  explain: "explain",
-  activate_source: "login"
-};
-
 const ActivityView = (p: Props) => {
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [nbId, setNbId] = useState<string | undefined>();
@@ -56,18 +48,22 @@ const ActivityView = (p: Props) => {
   const hitRate = m && m.totalQueries + m.cacheHits > 0 ? (m.cacheHits / (m.totalQueries + m.cacheHits)) * 100 : 0;
 
   return (
-    <>
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h1>Activity</h1>
+          <p>Query history, the audit trail, and the tools built on top of them.</p>
+        </div>
+      </div>
       <div className="kpi-grid">
         {[
-          { label: "Queries executed", icon: "play", value: m ? formatNumber(m.totalQueries) : "–" },
-          { label: "Cache hit rate", icon: "layers", value: m ? `${hitRate.toFixed(0)}%` : "–", foot: m ? `${m.cacheHits} hits` : "" },
-          { label: "Errors", icon: "alert", value: m ? formatNumber(m.queryErrors) : "–" },
-          { label: "Exports", icon: "download", value: m ? formatNumber(m.exports) : "–" }
+          { label: "Queries executed", value: m ? formatNumber(m.totalQueries) : "–" },
+          { label: "Cache hit rate", value: m ? `${hitRate.toFixed(0)}%` : "–", foot: m ? `${m.cacheHits} hits` : "" },
+          { label: "Errors", value: m ? formatNumber(m.queryErrors) : "–" },
+          { label: "Exports", value: m ? formatNumber(m.exports) : "–" }
         ].map((k) => (
           <div className="card kpi" key={k.label}>
-            <span className="kpi-label">
-              <Icon name={k.icon} /> {k.label}
-            </span>
+            <span className="kpi-label">{k.label}</span>
             <span className="kpi-value">{k.value}</span>
             <span className="kpi-foot">{k.foot ?? "this API session"}</span>
           </div>
@@ -94,16 +90,12 @@ const ActivityView = (p: Props) => {
                       {item.rowCount !== null ? `${formatNumber(item.rowCount)} rows` : item.error?.slice(0, 80)}
                     </p>
                   </div>
-                  <span className={item.status === "failed" ? "pill bad" : "pill ok"}>
-                    <Icon name={item.status === "failed" ? "x" : "check"} />
-                    {item.status}
-                  </span>
+                  <span className={item.status === "failed" ? "pill bad" : "pill ok"}>{item.status}</span>
                 </button>
               ))}
             </div>
           ) : (
             <div className="empty-state">
-              <Icon name="history" />
               <p>No queries yet.</p>
             </div>
           )}
@@ -115,7 +107,6 @@ const ActivityView = (p: Props) => {
               <h2>Audit trail</h2>
               <p className="card-sub">Every data fetch, with source and time (FR-5)</p>
             </div>
-            <Icon name="shield" size={18} className="muted" />
           </div>
           {audit.length ? (
             <div className="timeline">
@@ -124,7 +115,6 @@ const ActivityView = (p: Props) => {
                   <span className={e.action === "query" ? "dot ok" : "dot"} />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <Icon name={ACTION_ICON[e.action] ?? "info"} size={13} />
                       <b style={{ fontWeight: 600 }}>{e.action.replace("_", " ")}</b>
                       <span className="muted">· {e.dataSourceId}</span>
                     </div>
@@ -152,11 +142,11 @@ const ActivityView = (p: Props) => {
               <p className="card-sub">Statistical summary of the current Explore query</p>
             </div>
             <button type="button" className="button ghost" onClick={p.onRunAssistant}>
-              <Icon name="sparkle" /> Summarize
+              Summarize
             </button>
           </div>
           {p.assistant ? (
-            <div className="assistant-grid fade-in">
+            <div className="assistant-grid">
               <div className="assistant-card">
                 <p className="muted" style={{ fontSize: 12 }}>
                   Rows
@@ -216,7 +206,7 @@ const ActivityView = (p: Props) => {
               <p className="card-sub">Saved views of a query + result summary</p>
             </div>
             <button type="button" className="button ghost" onClick={p.onCreateSnapshot}>
-              <Icon name="camera" /> Save current
+              Save current
             </button>
           </div>
           {p.snapshots.length ? (
@@ -231,7 +221,6 @@ const ActivityView = (p: Props) => {
                       {s.summary} · {relativeTime(s.createdAt)}
                     </p>
                   </div>
-                  <Icon name="chevron" size={14} />
                 </button>
               ))}
             </div>
@@ -266,7 +255,7 @@ const ActivityView = (p: Props) => {
               <input type="number" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
             </label>
             <button type="button" className="button" onClick={() => p.onCreateAlert({ name: alertName, comparison, threshold })}>
-              <Icon name="bell" /> Create
+              Create
             </button>
           </div>
           {p.alerts.length ? (
@@ -286,10 +275,7 @@ const ActivityView = (p: Props) => {
                     </div>
                     <div className="button-row">
                       {a.lastValue !== undefined ? (
-                        <span className={triggered ? "pill bad" : "pill ok"}>
-                          <Icon name={triggered ? "alert" : "check"} />
-                          {triggered ? "triggered" : "ok"}
-                        </span>
+                        <span className={triggered ? "pill bad" : "pill ok"}>{triggered ? "triggered" : "ok"}</span>
                       ) : null}
                       <button type="button" className="button ghost" onClick={() => p.onEvaluateAlert(a)}>
                         Evaluate
@@ -320,7 +306,7 @@ const ActivityView = (p: Props) => {
                   setNbContent("");
                 }}
               >
-                <Icon name="plus" /> New
+                New
               </button>
               <button
                 type="button"
@@ -330,7 +316,7 @@ const ActivityView = (p: Props) => {
                   if (saved) setNbId(saved.id);
                 }}
               >
-                <Icon name="save" /> Save
+                Save
               </button>
             </div>
           </div>
@@ -356,7 +342,7 @@ const ActivityView = (p: Props) => {
                       setNbContent(n.content);
                     }}
                   >
-                    <Icon name="notebook" /> {n.title}
+                    {n.title}
                   </button>
                 ))}
               </div>
@@ -364,7 +350,7 @@ const ActivityView = (p: Props) => {
           </div>
         </section>
       </div>
-    </>
+    </div>
   );
 };
 

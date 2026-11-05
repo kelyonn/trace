@@ -2,12 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import type { Column, SemanticCube, SemanticModel } from "@trace/shared-types";
 import type { Requester, QueryPayload } from "../lib/api";
 import type { StreamState } from "../hooks/useQueryStream";
-import { columnKind, formatDuration, formatMeasure } from "../lib/format";
+import { columnKind, formatDuration } from "../lib/format";
 import SqlEditor from "../components/SqlEditor";
 import DataTable from "../components/DataTable";
 import AutoChart, { planChart } from "../components/AutoChart";
-import CubeViewer from "../cube/CubeViewer";
-import { detectPivot } from "../cube/pivot";
+import ResultCube, { cubeShape } from "../cube/ResultCube";
 import Icon from "../components/Icon";
 import { quickQueryTemplates } from "../demo-queries";
 
@@ -40,7 +39,6 @@ type Props = {
   onLoadMore: () => void;
   onExport: () => void;
   onSnapshot: () => void;
-  onDrill: (row: string, col: string) => void;
 };
 
 const TypeIcon = ({ col }: { col: Column }) => {
@@ -95,7 +93,7 @@ const ExploreView = (p: Props) => {
     void loadColumns(t);
   };
 
-  const pivot = useMemo(() => (p.result ? detectPivot(p.result.columns, p.result.rows) : null), [p.result]);
+  const pivot = useMemo(() => (p.result ? cubeShape(p.result.columns, p.result.rows) : null), [p.result]);
   const chartable = useMemo(() => (p.result ? planChart(p.result.columns, p.result.rows).kind !== "none" : false), [p.result]);
 
   // Pick the most expressive view automatically when a new result lands.
@@ -133,7 +131,7 @@ const ExploreView = (p: Props) => {
         <section className="card">
           <div className="card-header">
             <h2>Schema</h2>
-            <span className="pill">{tables.length} tables</span>
+            <span className="muted small mono">{tables.length}</span>
           </div>
           {schemaError ? <p className="error">{schemaError}</p> : null}
           <div className="tree">
@@ -169,7 +167,7 @@ const ExploreView = (p: Props) => {
                         p.onRun(sql);
                       }}
                     >
-                      <Icon name="play" size={12} /> Preview 50 rows
+                      Preview 50 rows →
                     </button>
                   </div>
                 ) : null}
@@ -233,14 +231,13 @@ const ExploreView = (p: Props) => {
                         className={dims.includes(d.name) ? "chip on" : "chip"}
                         onClick={() => setDims((prev) => (prev.includes(d.name) ? prev.filter((x) => x !== d.name) : [...prev, d.name]))}
                       >
-                        {dims.includes(d.name) ? <Icon name="check" /> : <Icon name="plus" />}
                         {d.name}
                       </button>
                     ))}
                   </div>
                 </div>
                 <button type="button" className="button ghost" onClick={buildSemantic}>
-                  <Icon name="wand" /> Generate SQL
+                  Generate SQL
                 </button>
               </div>
             ) : (
@@ -287,7 +284,7 @@ const ExploreView = (p: Props) => {
                 <input type="number" min={1} value={vbLimit} onChange={(e) => setVbLimit(Number(e.target.value))} />
               </label>
               <button type="button" className="button ghost" onClick={buildVisual} disabled={!vbTable}>
-                <Icon name="wand" /> Build SQL
+                Build SQL
               </button>
             </div>
           )}
@@ -299,23 +296,23 @@ const ExploreView = (p: Props) => {
           <div className="card-header">
             <div>
               <h2>SQL</h2>
-              <p className="card-sub">Pushdown to the active source · policy-checked and audited</p>
+              <p className="card-sub">Pushed down to the active source. Every query is policy-checked and audited.</p>
             </div>
             <div className="button-row">
               <button type="button" className="button ghost" onClick={p.onExplain} disabled={p.loading}>
-                <Icon name="explain" /> Explain
+                Explain
               </button>
               {streaming ? (
                 <button type="button" className="button ghost" onClick={p.onCancelStream}>
-                  <Icon name="stop" /> Cancel stream
+                  Cancel stream
                 </button>
               ) : (
                 <button type="button" className="button ghost" onClick={p.onStream} disabled={p.loading}>
-                  <Icon name="stream" /> Stream
+                  Stream
                 </button>
               )}
               <button type="button" className="button" onClick={() => p.onRun()} disabled={p.loading}>
-                {p.loading ? <span className="spinner" /> : <Icon name="play" />}
+                {p.loading ? <span className="spinner" /> : null}
                 Run <span className="kbd">⌘↵</span>
               </button>
             </div>
@@ -362,7 +359,7 @@ const ExploreView = (p: Props) => {
               <h2>Streamed results</h2>
               {p.streamState.status === "streaming" ? (
                 <span className="pill warn">
-                  <span className="spinner" style={{ width: 10, height: 10 }} /> Live · {p.streamState.rowCount} rows
+                  streaming · {p.streamState.rowCount} rows
                 </span>
               ) : p.streamState.status === "complete" ? (
                 <span className="pill ok">
@@ -384,21 +381,21 @@ const ExploreView = (p: Props) => {
           <div className="card-header">
             <div className="segmented" role="tablist" aria-label="Result view">
               <button type="button" className={view === "table" ? "active" : ""} onClick={() => setView("table")} disabled={!r}>
-                <Icon name="table" /> Table
+                Table
               </button>
               <button type="button" className={view === "chart" ? "active" : ""} onClick={() => setView("chart")} disabled={!r}>
-                <Icon name="chart" /> Chart
+                Chart
               </button>
               <button type="button" className={view === "cube" ? "active" : ""} onClick={() => setView("cube")} disabled={!pivot}>
-                <Icon name="cube" /> 3D cube
+                Cube
               </button>
             </div>
             <div className="button-row">
               <button type="button" className="button ghost" onClick={p.onSnapshot} disabled={!r}>
-                <Icon name="camera" /> Snapshot
+                Snapshot
               </button>
               <button type="button" className="button ghost" onClick={p.onExport} disabled={!r || p.loading}>
-                <Icon name="download" /> CSV
+                CSV
               </button>
               {r?.nextUri ? (
                 <button type="button" className="button ghost" onClick={p.onLoadMore} disabled={p.loading}>
@@ -415,18 +412,11 @@ const ExploreView = (p: Props) => {
                 <span className="pill">{formatDuration(r.durationMs ?? 0)}</span>
                 <span className={r.cacheHit ? "pill ok" : "pill accent"}>{r.cacheHit ? "cache hit" : "live query"}</span>
                 {r.maskColumns?.length ? (
-                  <span className="pill warn">
-                    <Icon name="shield" /> masked: {r.maskColumns.join(", ")}
-                  </span>
+                  <span className="pill warn">masked: {r.maskColumns.join(", ")}</span>
                 ) : null}
               </div>
               {view === "cube" && pivot ? (
-                <CubeViewer
-                  pivot={pivot}
-                  theme={p.theme}
-                  onDrill={p.onDrill}
-                  valueFormat={(n) => formatMeasure(pivot.measureName, n)}
-                />
+                <ResultCube columns={r.columns} rows={r.rows} theme={p.theme} />
               ) : view === "chart" ? (
                 <AutoChart columns={r.columns} rows={r.rows} />
               ) : (
@@ -435,11 +425,10 @@ const ExploreView = (p: Props) => {
             </>
           ) : (
             <div className="empty-state">
-              <Icon name="sparkle" />
-              <p className="status-title">Run a query to see results</p>
+              <p className="status-title">No result yet</p>
               <p>Pick a preset above, build one from the semantic model, or write SQL directly.</p>
               <button type="button" className="button" onClick={() => p.onRun()}>
-                <Icon name="play" /> Run current query
+                Run current query
               </button>
             </div>
           )}
