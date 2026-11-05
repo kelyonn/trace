@@ -6,9 +6,8 @@ import BarChart from "../components/charts/BarChart";
 import Heatmap from "../components/charts/Heatmap";
 import Sparkline from "../components/charts/Sparkline";
 import { seriesColor } from "../components/charts/useWidth";
-import CubeViewer from "../cube/CubeViewer";
 import { detectPivot } from "../cube/pivot";
-import { buildCubeSql, DEFAULT_CUBE, type CubeState } from "../cube/model";
+import type { OlapState } from "../cube/olap";
 import Icon from "../components/Icon";
 
 const REGIONS = ["North America", "Europe", "APAC", "Latin America", "Middle East", "Africa"];
@@ -51,7 +50,7 @@ ORDER BY revenue DESC
 LIMIT 8`
 };
 
-type Results = Partial<Record<keyof typeof OVERVIEW_SQL | "cube", QueryPayload>>;
+type Results = Partial<Record<keyof typeof OVERVIEW_SQL, QueryPayload>>;
 
 type Props = {
   request: Requester;
@@ -59,7 +58,7 @@ type Props = {
   refreshKey: number;
   engineLabel?: string;
   onOpenSql: (sql: string) => void;
-  onOpenCube: (state?: CubeState) => void;
+  onOpenCube: (state?: Partial<OlapState>) => void;
 };
 
 const Delta = ({ now, prev }: { now: number; prev: number }) => {
@@ -68,7 +67,7 @@ const Delta = ({ now, prev }: { now: number; prev: number }) => {
   const up = pct >= 0;
   return (
     <span className={up ? "delta up" : "delta down"}>
-      <Icon name={up ? "up" : "down"} />
+      {up ? "+" : "−"}
       {Math.abs(pct).toFixed(1)}%
     </span>
   );
@@ -87,7 +86,7 @@ const Card = ({
   span: string;
   action?: React.ReactNode;
 }) => (
-  <section className={`card ${span} fade-in`}>
+  <section className={`card ${span}`}>
     <div className="card-header">
       <div>
         <h2>{title}</h2>
@@ -109,7 +108,7 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
   const load = useCallback(async () => {
     setLoading(true);
     setErrors([]);
-    const entries = Object.entries({ ...OVERVIEW_SQL, cube: buildCubeSql(DEFAULT_CUBE) }) as [keyof Results, string][];
+    const entries = Object.entries(OVERVIEW_SQL) as [keyof Results, string][];
     const settled = await Promise.allSettled(
       entries.map(([, sql]) => request<QueryPayload>("/query", { body: { sql } }))
     );
@@ -181,27 +180,23 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
     () => (data.heat ? detectPivot(data.heat.columns, data.heat.rows) : null),
     [data.heat]
   );
-  const cubePivot = useMemo(
-    () => (data.cube ? detectPivot(data.cube.columns, data.cube.rows) : null),
-    [data.cube]
-  );
 
   return (
-    <>
-      <div className="hero-strip">
+    <div className="page">
+      <div className="page-head">
         <div>
-          <h2>Commerce overview</h2>
+          <h1>Overview</h1>
           <p>
-            {kpis ? `Trailing 12 months · ${kpis.period}` : "Loading the semantic model…"}
-            {engineLabel ? ` · live on ${engineLabel}` : ""}
+            {kpis ? `Trailing twelve months, ${kpis.period}` : "Loading…"}
+            {engineLabel ? ` — ${engineLabel}` : ""}
           </p>
         </div>
         <div className="button-row">
           <button type="button" className="button ghost" onClick={() => void load()} disabled={loading}>
-            {loading ? <span className="spinner" /> : <Icon name="refresh" />} Refresh
+            {loading ? <span className="spinner" /> : null} Refresh
           </button>
           <button type="button" className="button" onClick={() => onOpenCube()}>
-            <Icon name="cube" /> Open Cube Studio
+            Open cube
           </button>
         </div>
       </div>
@@ -260,9 +255,7 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
           }
         ].map((k) => (
           <div className="card kpi" key={k.label}>
-            <span className="kpi-label">
-              <Icon name={k.icon} /> {k.label}
-            </span>
+            <span className="kpi-label">{k.label}</span>
             {k.value ? <span className="kpi-value">{k.value}</span> : <div className="skeleton" style={{ height: 32, width: "60%" }} />}
             <span className="kpi-foot">
               {k.now !== undefined && k.prev !== undefined ? <Delta now={k.now} prev={k.prev} /> : null}
@@ -280,7 +273,7 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
           sub="Shipped + open orders · click legend to isolate"
           action={
             <button type="button" className="button subtle" onClick={() => onOpenSql(OVERVIEW_SQL.regionMonthly)}>
-              <Icon name="explore" /> Query
+              SQL
             </button>
           }
         >
@@ -304,7 +297,7 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
           sub="All orders · share of total"
           action={
             <button type="button" className="button subtle" onClick={() => onOpenSql(OVERVIEW_SQL.status)}>
-              <Icon name="explore" /> Query
+              SQL
             </button>
           }
         >
@@ -326,38 +319,6 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
           ) : null}
         </Card>
 
-        <Card
-          span="span-7"
-          title="Revenue cube · region × category"
-          sub="3-D OLAP preview · drag to orbit, click a bar to drill in Cube Studio"
-          action={
-            <button type="button" className="button subtle" onClick={() => onOpenCube()}>
-              <Icon name="cube" /> Expand
-            </button>
-          }
-        >
-          {cubePivot ? (
-            <CubeViewer
-              pivot={cubePivot}
-              theme={theme}
-              valueFormat={(n) => formatCurrency(n)}
-              onDrill={(row, col) =>
-                onOpenCube({
-                  ...DEFAULT_CUBE,
-                  rows: "industry",
-                  cols: "sku",
-                  filters: [
-                    { dim: "region", value: row },
-                    { dim: "category", value: col }
-                  ]
-                })
-              }
-            />
-          ) : (
-            <Skeleton h={440} />
-          )}
-        </Card>
-
         <Card span="span-5" title="Revenue by product category" sub="Order-line revenue, all time">
           {data.category ? (
             <BarChart
@@ -366,7 +327,11 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
               labelWidth={92}
               barHeight={22}
               onSelect={(d) =>
-                onOpenCube({ rows: "industry", cols: "year", measure: "revenue", filters: [{ dim: "category", value: d.label }] })
+                onOpenCube({
+                  x: { hier: "product", depth: 1, path: [d.label] },
+                  y: { hier: "customer", depth: 0, path: [] },
+                  z: { hier: "time", depth: 0, path: [] }
+                })
               }
             />
           ) : (
@@ -392,15 +357,11 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
               colTitle="category"
               valueFormat={(n) => formatCurrency(n)}
               cellHeight={28}
-              onCellClick={(row, col) =>
+              onCellClick={(_row, col) =>
                 onOpenCube({
-                  rows: "region",
-                  cols: "quarter",
-                  measure: "revenue",
-                  filters: [
-                    { dim: "industry", value: row },
-                    { dim: "category", value: col }
-                  ]
+                  x: { hier: "product", depth: 1, path: [col] },
+                  y: { hier: "customer", depth: 0, path: [] },
+                  z: { hier: "time", depth: 0, path: [] }
                 })
               }
             />
@@ -410,12 +371,12 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
         </Card>
 
         <Card
-          span="span-5"
+          span="span-12"
           title="Top accounts"
           sub="Customer names are masked unless your role is admin"
           action={
             <button type="button" className="button subtle" onClick={() => onOpenSql(OVERVIEW_SQL.topCustomers)}>
-              <Icon name="explore" /> Query
+              SQL
             </button>
           }
         >
@@ -452,7 +413,7 @@ const OverviewView = ({ request, theme, refreshKey, engineLabel, onOpenSql, onOp
           )}
         </Card>
       </div>
-    </>
+    </div>
   );
 };
 

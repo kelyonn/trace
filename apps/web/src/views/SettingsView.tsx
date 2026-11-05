@@ -2,7 +2,6 @@ import type { DataSource } from "@trace/shared-types";
 import type { StatusPayload } from "../panels/types";
 import type { AuthState } from "../hooks/useAuth";
 import { formatNumber } from "../lib/format";
-import Icon from "../components/Icon";
 
 type Props = {
   status: StatusPayload | null;
@@ -19,19 +18,18 @@ type Props = {
   onRefreshStatus: () => void;
 };
 
-const SOURCE_COLORS: Record<string, string> = {
-  postgres: "var(--series-1)",
-  snowflake: "var(--series-3)",
-  bigquery: "var(--series-4)",
-  sqlserver: "var(--series-8)"
-};
-
 const SettingsView = (p: Props) => {
   const s = p.status;
   const engine = s?.engine;
   const counts = engine?.dataset?.counts;
   return (
-    <>
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h1>Sources &amp; access</h1>
+          <p>Where queries run, which source is active, and who you are.</p>
+        </div>
+      </div>
       <section className="card">
         <div className="card-header">
           <div>
@@ -42,14 +40,12 @@ const SettingsView = (p: Props) => {
             </p>
           </div>
           <button type="button" className="button ghost" onClick={p.onRefreshStatus}>
-            <Icon name="refresh" /> Recheck
+            Recheck
           </button>
         </div>
         <div className="status-grid">
           <div className="status-card">
-            <span className="kpi-label">
-              <Icon name="layers" /> Active engine
-            </span>
+            <span className="kpi-label">Active engine</span>
             <span className="status-title" style={{ fontSize: 16 }}>
               {engine?.label ?? "Checking…"}
             </span>
@@ -58,12 +54,9 @@ const SettingsView = (p: Props) => {
             </span>
           </div>
           <div className="status-card">
-            <span className="kpi-label">
-              <Icon name="stream" /> Trino
-            </span>
+            <span className="kpi-label">Trino</span>
             <span>
               <span className={s?.trino.ok ? "pill ok" : "pill"}>
-                <span className={s?.trino.ok ? "dot ok" : "dot"} style={{ width: 6, height: 6, boxShadow: "none" }} />
                 {s?.trino.ok ? `online · v${s.trino.version ?? "?"}` : "not connected"}
               </span>
             </span>
@@ -72,9 +65,7 @@ const SettingsView = (p: Props) => {
             </span>
           </div>
           <div className="status-card">
-            <span className="kpi-label">
-              <Icon name="database" /> Source database
-            </span>
+            <span className="kpi-label">Source database</span>
             <span>
               <span className={s?.postgres.ok ? "pill ok" : "pill bad"}>
                 {s?.postgres.ok ? "ready" : "unavailable"}
@@ -103,7 +94,7 @@ const SettingsView = (p: Props) => {
         ) : null}
         {s?.demo && !s.demo.seeded ? (
           <div className="banner warn" style={{ marginTop: 12 }}>
-            <Icon name="alert" />
+            
             <div>
               <p className="status-title">Demo data not loaded</p>
               <p className="muted">
@@ -133,9 +124,6 @@ const SettingsView = (p: Props) => {
                   className={active ? "source-item active" : "source-item"}
                   onClick={() => p.onActivateSource(src.id)}
                 >
-                  <span className="source-logo" style={{ color: SOURCE_COLORS[src.type] }}>
-                    <Icon name="database" />
-                  </span>
                   <div>
                     <p className="status-title">{src.name}</p>
                     <p className="status-meta" style={{ marginTop: 0 }}>
@@ -145,11 +133,11 @@ const SettingsView = (p: Props) => {
                   <span className={active ? "pill ok" : src.status === "auth_required" ? "pill warn" : "pill"}>
                     {active ? (
                       <>
-                        <Icon name="check" /> Active
+                        Active
                       </>
                     ) : src.status === "auth_required" ? (
                       <>
-                        <Icon name="key" /> Sign in
+                        Sign in
                       </>
                     ) : (
                       "Connect"
@@ -190,16 +178,16 @@ const SettingsView = (p: Props) => {
             {p.authState.status === "authenticated" ? (
               <>
                 <span className="pill ok">
-                  <Icon name="check" /> Signed in via Keycloak
+                  Signed in via Keycloak
                 </span>
                 <button type="button" className="button ghost" onClick={p.onLogout}>
-                  <Icon name="logout" /> Sign out
+                  Sign out
                 </button>
               </>
             ) : (
               <>
                 <button type="button" className="button ghost" onClick={p.onLogin}>
-                  <Icon name="login" /> Sign in with Keycloak
+                  Sign in with Keycloak
                 </button>
                 <span className="muted" style={{ fontSize: 12.5 }}>
                   Optional locally · required for auth-gated sources
@@ -210,7 +198,7 @@ const SettingsView = (p: Props) => {
           {p.authState.status === "error" ? <p className="error">{p.authState.message}</p> : null}
         </section>
       </div>
-    </>
+    </div>
   );
 };
 
