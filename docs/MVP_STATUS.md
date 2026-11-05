@@ -4,7 +4,7 @@ Maps PRD functional requirements (FR-1 through FR-10) to implementation. Last up
 
 | FR | Requirement | Status | Where |
 |----|-------------|--------|-------|
-| FR-1 | UI lists configured data sources with status | **Done** | `GET /api/v1/data-sources`, Data sources panel in `apps/web/src/App.tsx` |
+| FR-1 | UI lists configured data sources with status | **Done** | `GET /api/v1/data-sources`; Sources view (add, test, activate, remove, upload) |
 | FR-2 | Selecting a source triggers auth; on success schema loads | **Done** | `auth_required` sources require Keycloak JWT on activate; pending source resumed after PKCE (`useAuth`, `activateSource`) |
 | FR-3 | Visual / semantic builder or raw SQL against active source | **Done** | `POST /api/v1/query`, semantic builder, visual builder |
 | FR-4 | Results streamed to 3-D viewer (P95 ≤ 2s @ 50M rows) | **Partial** | SSE `POST /queries` + `GET /queries/:id/stream`, `?stream=true` on sync query; cube viewer live; large-scale perf not benchmarked |
@@ -37,9 +37,13 @@ Maps PRD functional requirements (FR-1 through FR-10) to implementation. Last up
 | Keycloak | `KEYCLOAK_ENABLED=true` | Valid JWT sets role from `realm_access.roles`; API key still accepted when `AUTH_REQUIRED=true` |
 | SSE | `?token=` on stream URL | Passes Bearer token when `EventSource` cannot send headers |
 
+## Data sources
+
+Hot-swappable connectors: PostgreSQL, MySQL/MariaDB, SQLite, Trino, CSV/JSON uploads, plus the built-in retail demo and fleet SQLite sample. Each source gets an automatically inferred semantic model (`apps/api/src/lib/automodel.ts`) that drives the overview, the cube and the query builder.
+
 ## Out of scope (deferred)
 
-- Snowflake / BigQuery / SQL Server connectors (Postgres via Trino only)
+- Snowflake / BigQuery / SQL Server connectors (reachable today through Trino catalogs)
 - Vault secrets rotation
 - Kubernetes manifests (`infra/k8s/README.md`)
 - OpenTelemetry tracing

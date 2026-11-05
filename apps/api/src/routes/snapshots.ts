@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "crypto";
 import { snapshots, saveSnapshots, addAudit } from "../lib/store.js";
-import { activeSourceId } from "../lib/state.js";
+import { activeSourceId } from "../lib/sources.js";
 
 export default async function snapshotRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get("/api/v1/snapshots", async () => ({ items: snapshots }));
@@ -33,7 +33,7 @@ export default async function snapshotRoutes(fastify: FastifyInstance): Promise<
       addAudit({
         id: randomUUID(),
         action: "query",
-        dataSourceId: activeSourceId,
+        dataSourceId: activeSourceId(),
         timestamp: new Date().toISOString(),
         detail: `snapshot:${snapshot.id}`
       });

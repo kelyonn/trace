@@ -14,5 +14,8 @@
     "build:web": "npm -w apps/web run build",
     "test": "npm -w apps/api run test && npm -w apps/web run test",
     "test:smoke": "bash infra/scripts/sanity_check.sh"
+  },
+  "engines": {
+    "node": ">=22.13"
   }
 }

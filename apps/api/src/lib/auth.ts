@@ -16,7 +16,12 @@ function getJwks() {
   return remoteJwks;
 }
 
-export const maskColumns = (process.env.MASK_COLUMNS ?? "name")
+/**
+ * PII columns masked for non-admin roles. Entries are bare column names
+ * (`email`) or table-qualified (`customers.name`); raw SQL results are masked
+ * by the bare column name, and the semantic model hides matching dimensions.
+ */
+export const maskColumns = (process.env.MASK_COLUMNS ?? "customers.name,drivers.name,email,phone")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -100,8 +105,9 @@ export function maskRows(
     columnsToMask ?? (role === "admin" ? [] : maskColumns);
   if (role === "admin" || toMask.length === 0) return rows;
 
+  const bare = new Set(toMask.map((c) => c.split(".").pop()!.toLowerCase()));
   const indexes = columns
-    .map((col, i) => (toMask.includes(col.name) ? i : -1))
+    .map((col, i) => (bare.has(col.name.toLowerCase()) ? i : -1))
     .filter((i) => i >= 0);
 
   if (indexes.length === 0) return rows;

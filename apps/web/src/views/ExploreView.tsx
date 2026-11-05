@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Column, SemanticCube, SemanticModel } from "@trace/shared-types";
+import type { Column } from "@trace/shared-types";
 import type { Requester, QueryPayload } from "../lib/api";
 import type { StreamState } from "../hooks/useQueryStream";
 import { columnKind, formatDuration } from "../lib/format";
@@ -8,23 +8,44 @@ import DataTable from "../components/DataTable";
 import AutoChart, { planChart } from "../components/AutoChart";
 import ResultCube, { cubeShape } from "../cube/ResultCube";
 import Icon from "../components/Icon";
-import { quickQueryTemplates } from "../demo-queries";
+import { aggregateSql, dimByKey, groupedDims, monthDim, type AggregateRequest, type AutoModel } from "../lib/model";
 
-const PRESET_LABELS: Record<string, string> = {
-  cube_by_status_region: "Cube: status × region",
-  cube_by_industry_category: "Cube: industry × category",
-  monthly_revenue: "Monthly revenue",
-  revenue_by_region: "Revenue by region",
-  orders_by_status: "Orders by status",
-  top_customers: "Top customers",
-  recent_orders: "Recent orders"
+type TableInfo = {
+  name: string;
+  rowCount: number | null;
+  primaryKey: string[];
+  foreignKeys: { column: string; refTable: string; refColumn: string }[];
+  columns: { name: string; type: string; kind: string }[];
 };
+
+type Preset = { label: string; req?: AggregateRequest; sql?: string };
+
+/** Starter queries derived from the active source's model. */
+function presetsFor(model: AutoModel | null): Preset[] {
+  if (!model) return [];
+  const m = model.measures[0];
+  const out: Preset[] = [{ label: `Sample ${model.fact.table}`, sql: `SELECT *\nFROM ${model.fact.table}\nLIMIT 100` }];
+  if (!m) return out;
+  const { x, y, z } = model.defaults;
+  const label = (k: string) => dimByKey(model, k)?.label ?? k;
+  const fact = model.fact.table;
+  if (x !== "__all" && y !== "__all")
+    out.push({ label: `${m.label} by ${label(x)} × ${label(y)} × ${label(z)}`, req: { dims: [x, y, z], measures: [m.key], fact } });
+  const month = monthDim(model);
+  if (month && x !== "__all") out.push({ label: `${m.label} by month × ${label(x)}`, req: { dims: [month.key, x], measures: [m.key], fact } });
+  for (const k of [x, y]) {
+    if (k !== "__all")
+      out.push({ label: `${m.label} by ${label(k)}`, req: { dims: [k], measures: [m.key, "count"], order: { by: "measure", dir: "desc" }, fact } });
+  }
+  return out;
+}
 
 type View = "table" | "chart" | "cube";
 
 type Props = {
   request: Requester;
   theme: string;
+  model: AutoModel | null;
   sql: string;
   onSqlChange: (s: string) => void;
   result: QueryPayload | null;
@@ -47,12 +68,9 @@ const TypeIcon = ({ col }: { col: Column }) => {
 };
 
 const ExploreView = (p: Props) => {
-  const [tables, setTables] = useState<string[]>([]);
+  const [schema, setSchema] = useState<TableInfo[]>([]);
   const [open, setOpen] = useState<string | null>(null);
-  const [columns, setColumns] = useState<Record<string, Column[]>>({});
   const [schemaError, setSchemaError] = useState<string | null>(null);
-  const [semantic, setSemantic] = useState<SemanticModel | null>(null);
-  const [cube, setCube] = useState<SemanticCube | null>(null);
   const [measure, setMeasure] = useState("");
   const [dims, setDims] = useState<string[]>([]);
   const [builderTab, setBuilderTab] = useState<"semantic" | "visual">("semantic");
@@ -62,35 +80,28 @@ const ExploreView = (p: Props) => {
   const [view, setView] = useState<View>("table");
 
   useEffect(() => {
-    p.request<{ tables: string[] }>("/schema")
-      .then((r) => setTables(r.tables ?? []))
+    setSchemaError(null);
+    p.request<{ tables: TableInfo[] }>("/schema?full=true")
+      .then((r) => setSchema(r.tables ?? []))
       .catch((err) => setSchemaError(err instanceof Error ? err.message : "Schema fetch failed"));
-    p.request<SemanticModel>("/semantic")
-      .then((m) => {
-        setSemantic(m);
-        if (m.cubes?.length) {
-          setCube(m.cubes[0]);
-          setMeasure(m.cubes[0].measures[0]?.name ?? "");
-        }
-      })
-      .catch(() => undefined);
-  }, [p.request]);
+  }, [p.request, p.model?.sourceId]);
 
-  const loadColumns = async (table: string) => {
-    if (columns[table]) return columns[table];
-    try {
-      const r = await p.request<{ columns: Column[] }>(`/schema?table=${encodeURIComponent(table)}`);
-      setColumns((prev) => ({ ...prev, [table]: r.columns ?? [] }));
-      return r.columns ?? [];
-    } catch (err) {
-      setSchemaError(err instanceof Error ? err.message : "Column fetch failed");
-      return [];
-    }
-  };
+  useEffect(() => {
+    setMeasure(p.model?.measures[0]?.key ?? "");
+    setDims([]);
+  }, [p.model]);
 
-  const toggleTable = (t: string) => {
-    setOpen((prev) => (prev === t ? null : t));
-    void loadColumns(t);
+  const tables = schema.map((t) => t.name);
+  const columns: Record<string, Column[]> = Object.fromEntries(schema.map((t) => [t.name, t.columns]));
+  const loadColumns = async (table: string) => columns[table] ?? [];
+  const toggleTable = (t: string) => setOpen((prev) => (prev === t ? null : t));
+  const presets = useMemo(() => presetsFor(p.model), [p.model]);
+
+  const applyPreset = async (preset: Preset) => {
+    const sql = preset.sql ?? (preset.req ? await aggregateSql(p.request, preset.req) : "");
+    if (!sql) return;
+    p.onSqlChange(sql);
+    p.onRun(sql);
   };
 
   const pivot = useMemo(() => (p.result ? cubeShape(p.result.columns, p.result.rows) : null), [p.result]);
@@ -105,15 +116,14 @@ const ExploreView = (p: Props) => {
     else setView("table");
   }, [p.result, pivot, chartable]);
 
-  const buildSemantic = () => {
-    if (!cube) return;
-    const m = cube.measures.find((x) => x.name === measure);
-    if (!m) return;
-    const fn = { sum: "SUM", count: "COUNT", avg: "AVG", min: "MIN", max: "MAX", count_distinct: "COUNT" }[m.type] ?? "SUM";
-    const expr = m.type === "count_distinct" ? `COUNT(DISTINCT ${m.sql}) AS ${m.name}` : `${fn}(${m.sql}) AS ${m.name}`;
-    const sql = dims.length
-      ? `SELECT ${dims.join(", ")}, ${expr}\nFROM ${cube.name}\nGROUP BY ${dims.map((_, i) => i + 1).join(", ")}\nORDER BY ${dims.length + 1} DESC`
-      : `SELECT ${expr}\nFROM ${cube.name}`;
+  const buildSemantic = async () => {
+    if (!p.model || !measure) return;
+    const sql = await aggregateSql(p.request, {
+      dims,
+      measures: [measure],
+      order: dims.length ? { by: "measure", dir: "desc" } : undefined,
+      fact: p.model.fact.table
+    });
     p.onSqlChange(sql);
   };
 
@@ -140,6 +150,10 @@ const ExploreView = (p: Props) => {
                 <button type="button" className={open === t ? "tree-table active" : "tree-table"} onClick={() => toggleTable(t)}>
                   <Icon name="tableIcon" />
                   {t}
+                  {t === p.model?.fact.table ? <span className="pill" style={{ color: "var(--select)" }}>fact</span> : null}
+                  <span className="muted small" style={{ marginLeft: "auto" }}>
+                    {schema.find((x) => x.name === t)?.rowCount?.toLocaleString() ?? ""}
+                  </span>
                   <Icon name="chevron" className="chev" />
                 </button>
                 {open === t ? (
@@ -154,13 +168,17 @@ const ExploreView = (p: Props) => {
                       >
                         <TypeIcon col={c} />
                         {c.name}
+                        {schema.find((x) => x.name === t)?.primaryKey.includes(c.name) ? <span className="muted">pk</span> : null}
+                        {schema.find((x) => x.name === t)?.foreignKeys.find((f) => f.column === c.name) ? (
+                          <span className="muted">→ {schema.find((x) => x.name === t)!.foreignKeys.find((f) => f.column === c.name)!.refTable}</span>
+                        ) : null}
                         <span className="type">{c.type}</span>
                       </button>
                     ))}
                     <button
                       type="button"
                       className="tree-col"
-                      style={{ color: "var(--accent-strong)", fontFamily: "var(--font-sans)" }}
+                      style={{ color: "var(--select)", fontFamily: "var(--font-sans)" }}
                       onClick={() => {
                         const sql = `SELECT *\nFROM ${t}\nLIMIT 50`;
                         p.onSqlChange(sql);
@@ -190,58 +208,46 @@ const ExploreView = (p: Props) => {
             </div>
           </div>
           {builderTab === "semantic" ? (
-            semantic && cube ? (
+            p.model ? (
               <div className="builder">
-                <label>
-                  Cube
-                  <select
-                    value={cube.name}
-                    onChange={(e) => {
-                      const c = semantic.cubes.find((x) => x.name === e.target.value) ?? null;
-                      setCube(c);
-                      setMeasure(c?.measures[0]?.name ?? "");
-                      setDims([]);
-                    }}
-                  >
-                    {semantic.cubes.map((c) => (
-                      <option key={c.name}>{c.name}</option>
-                    ))}
-                  </select>
-                </label>
                 <label>
                   Measure
                   <select value={measure} onChange={(e) => setMeasure(e.target.value)}>
-                    {cube.measures.map((m) => (
-                      <option key={m.name} value={m.name}>
-                        {m.name} · {m.type}
+                    {p.model.measures.map((m) => (
+                      <option key={m.key} value={m.key}>
+                        {m.label}
                       </option>
                     ))}
                   </select>
                 </label>
-                <div>
-                  <p className="status-title" style={{ fontSize: 12.5, marginBottom: 6 }}>
-                    Dimensions
-                  </p>
-                  <div className="chip-group">
-                    {cube.dimensions.map((d) => (
-                      <button
-                        key={d.name}
-                        type="button"
-                        title={d.description}
-                        className={dims.includes(d.name) ? "chip on" : "chip"}
-                        onClick={() => setDims((prev) => (prev.includes(d.name) ? prev.filter((x) => x !== d.name) : [...prev, d.name]))}
-                      >
-                        {d.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <button type="button" className="button ghost" onClick={buildSemantic}>
+                {groupedDims(p.model)
+                  .filter((g) => g.dims.some((d) => d.key !== "__all"))
+                  .map((g) => (
+                    <div key={g.label}>
+                      <p className="section-label" style={{ marginBottom: 4 }}>
+                        {g.label}
+                      </p>
+                      <div className="chip-group">
+                        {g.dims.map((d) => (
+                          <button
+                            key={d.key}
+                            type="button"
+                            className={dims.includes(d.key) ? "chip on" : "chip"}
+                            disabled={!dims.includes(d.key) && dims.length >= 3}
+                            onClick={() => setDims((prev) => (prev.includes(d.key) ? prev.filter((x) => x !== d.key) : [...prev, d.key]))}
+                          >
+                            {d.label.replace(/^.* · /, "")}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                <button type="button" className="button ghost" onClick={() => void buildSemantic()}>
                   Generate SQL
                 </button>
               </div>
             ) : (
-              <p className="muted">Semantic model unavailable.</p>
+              <p className="muted">Loading model…</p>
             )
           ) : (
             <div className="builder">
@@ -318,18 +324,11 @@ const ExploreView = (p: Props) => {
             </div>
           </div>
           <div className="preset-row">
-            {Object.keys(PRESET_LABELS)
-              .filter((k) => quickQueryTemplates[k])
-              .map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  className={p.sql === quickQueryTemplates[k] ? "chip on" : "chip"}
-                  onClick={() => p.onSqlChange(quickQueryTemplates[k])}
-                >
-                  {PRESET_LABELS[k]}
-                </button>
-              ))}
+            {presets.map((pr) => (
+              <button key={pr.label} type="button" className="chip" onClick={() => void applyPreset(pr)}>
+                {pr.label}
+              </button>
+            ))}
           </div>
           <SqlEditor
             value={p.sql}

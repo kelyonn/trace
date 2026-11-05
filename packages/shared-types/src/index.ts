@@ -70,8 +70,8 @@ export type Notebook = {
 export type DataSource = {
   id: string;
   name: string;
-  type: "postgres" | "snowflake" | "bigquery" | "sqlserver";
-  status: "connected" | "auth_required" | "error";
+  type: "demo" | "files" | "postgres" | "mysql" | "sqlite" | "trino";
+  status: "connected" | "auth_required" | "error" | "available";
 };
 
 export type SemanticMeasure = {
@@ -119,8 +119,21 @@ export type EngineInfo = {
   };
 };
 
+export type SourceStatusInfo = {
+  id: string;
+  name: string;
+  kind: "demo" | "files" | "postgres" | "mysql" | "sqlite" | "trino";
+  kindLabel: string;
+  ok: boolean;
+  error: string | null;
+  seeding: boolean;
+  tables: { name: string; rowCount: number | null }[];
+  totalRows: number;
+};
+
 export type StatusResponse = {
   activeSourceId: string;
+  source?: SourceStatusInfo;
   engine?: EngineInfo;
   trino: { ok: boolean; version: string | null; error: string | null };
   postgres: { ok: boolean; error: string | null };

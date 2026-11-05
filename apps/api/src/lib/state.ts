@@ -1,7 +1,3 @@
-import type { DataSource } from "@trace/shared-types";
-
-export type { DataSource };
-
 export type ExportJob = {
   id: string;
   status: "queued" | "ready" | "failed";
@@ -16,22 +12,6 @@ export type Metrics = {
   cacheHits: number;
   exports: number;
 };
-
-export const dataSources: DataSource[] = [
-  { id: "postgres-local", name: "Local Postgres", type: "postgres", status: "connected" },
-  {
-    id: "snowflake-demo",
-    name: "Snowflake (demo)",
-    type: "snowflake",
-    status: "auth_required"
-  }
-];
-
-export let activeSourceId: string = dataSources[0]?.id ?? "postgres-local";
-
-export function setActiveSourceId(id: string): void {
-  activeSourceId = id;
-}
 
 export const exportJobs: Record<string, ExportJob> = {};
 

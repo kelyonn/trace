@@ -1,79 +1,57 @@
 /**
- * Three-axis OLAP model for the Cube Explorer.
+ * Three-axis OLAP state over the automatic semantic model.
  *
- * Each axis is bound to a hierarchy (Customer, Product, Time, Status) at some
- * depth, with a drill path pinning the members above that depth. The server
- * query groups by the three current levels; slice and dice are applied
- * client-side so they respond instantly.
+ * Each axis is bound to a model dimension plus the drill path that led there
+ * (pinned members of coarser dimensions). The server groups by the three
+ * current dimensions; slice and dice are applied client-side so they respond
+ * instantly.
  */
-import { dim, measure as getMeasure, type DimensionKey, type MeasureKey } from "./model";
+import type { AggregateRequest, AutoModel, Filter } from "../lib/model";
 
 export type AxisKey = "x" | "y" | "z";
 export const AXES: AxisKey[] = ["x", "y", "z"];
 
-export type HierarchyKey = "customer" | "product" | "time" | "status";
+export type AxisState = { dim: string; pins: Filter[] };
 
-export const HIERARCHIES: Record<HierarchyKey, { label: string; levels: DimensionKey[]; ordered?: boolean }> = {
-  customer: { label: "Customer", levels: ["region", "industry", "customer"] },
-  product: { label: "Product", levels: ["category", "sku"] },
-  time: { label: "Time", levels: ["year", "quarter", "month"], ordered: true },
-  status: { label: "Order status", levels: ["status"] }
-};
+export type OlapState = { x: AxisState; y: AxisState; z: AxisState; measure: string; fact?: string };
 
-export type AxisState = { hier: HierarchyKey; depth: number; path: string[] };
-
-export type OlapState = {
-  x: AxisState;
-  y: AxisState;
-  z: AxisState;
-  measure: MeasureKey;
-};
-
-export const DEFAULT_OLAP: OlapState = {
-  x: { hier: "product", depth: 0, path: [] },
-  y: { hier: "customer", depth: 0, path: [] },
-  z: { hier: "time", depth: 0, path: [] },
-  measure: "revenue"
-};
-
-export const levelOf = (a: AxisState): DimensionKey => HIERARCHIES[a.hier].levels[a.depth];
-export const canDrill = (a: AxisState) => a.depth < HIERARCHIES[a.hier].levels.length - 1;
-export const canRollUp = (a: AxisState) => a.depth > 0;
-
-const lit = (v: string) => `'${v.replace(/'/g, "''")}'`;
-
-export function buildOlapSql(s: OlapState): string {
-  const m = getMeasure(s.measure);
-  const where: string[] = [];
-  for (const k of AXES) {
-    const a = s[k];
-    a.path.forEach((value, i) => where.push(`${dim(HIERARCHIES[a.hier].levels[i]).sql} = ${lit(value)}`));
-  }
-  const [x, y, z] = AXES.map((k) => dim(levelOf(s[k])));
-  return [
-    `SELECT ${x.sql} AS x_${x.key}, ${y.sql} AS y_${y.key}, ${z.sql} AS z_${z.key}, ${m.sql} AS ${m.key}`,
-    "FROM order_lines ol",
-    "JOIN orders o ON o.id = ol.order_id",
-    "JOIN customers c ON c.id = o.customer_id",
-    "JOIN products p ON p.id = ol.product_id",
-    where.length ? `WHERE ${where.join("\n  AND ")}` : null,
-    "GROUP BY 1, 2, 3"
-  ]
-    .filter(Boolean)
-    .join("\n");
+export function olapFromModel(model: AutoModel): OlapState {
+  return {
+    x: { dim: model.defaults.x, pins: [] },
+    y: { dim: model.defaults.y, pins: [] },
+    z: { dim: model.defaults.z, pins: [] },
+    measure: model.defaults.measure,
+    fact: model.fact.table
+  };
 }
 
-/** Drill one axis into a member: pin it on the path and step one level down. */
-export function drillAxis(s: OlapState, axis: AxisKey, member: string): OlapState {
+/** True when every axis and the measure still exist in the model (e.g. after a source swap). */
+export function isValidFor(s: OlapState, model: AutoModel): boolean {
+  const dims = new Set(model.dimensions.map((d) => d.key));
+  return (
+    model.measures.some((m) => m.key === s.measure) &&
+    AXES.every((k) => dims.has(s[k].dim) && s[k].pins.every((p) => dims.has(p.dim)))
+  );
+}
+
+const nextOf = (model: AutoModel, dim: string) => model.dimensions.find((d) => d.key === dim)?.next ?? null;
+
+export const canDrill = (model: AutoModel, a: AxisState) => !!nextOf(model, a.dim);
+export const canRollUp = (a: AxisState) => a.pins.length > 0;
+
+/** Drill one axis into a member: pin it and step to the next (finer) dimension. */
+export function drillAxis(s: OlapState, model: AutoModel, axis: AxisKey, member: string): OlapState {
   const a = s[axis];
-  if (!canDrill(a)) return s;
-  return { ...s, [axis]: { ...a, depth: a.depth + 1, path: [...a.path, member] } };
+  const next = nextOf(model, a.dim);
+  if (!next) return s;
+  return { ...s, [axis]: { dim: next, pins: [...a.pins, { dim: a.dim, value: member }] } };
 }
 
 export function rollUpAxis(s: OlapState, axis: AxisKey): OlapState {
   const a = s[axis];
-  if (!canRollUp(a)) return s;
-  return { ...s, [axis]: { ...a, depth: a.depth - 1, path: a.path.slice(0, -1) } };
+  const last = a.pins[a.pins.length - 1];
+  if (!last) return s;
+  return { ...s, [axis]: { dim: last.dim, pins: a.pins.slice(0, -1) } };
 }
 
 /** Rotate axis bindings x→y→z→x (the classic "pivot"). */
@@ -81,20 +59,21 @@ export function pivotAxes(s: OlapState): OlapState {
   return { ...s, x: s.z, y: s.x, z: s.y };
 }
 
-export function swapAxes(s: OlapState, a: AxisKey, b: AxisKey): OlapState {
-  return { ...s, [a]: s[b], [b]: s[a] };
+/** Bind a dimension to an axis; if another axis shows it, the two swap. */
+export function setAxisDim(s: OlapState, axis: AxisKey, dim: string): OlapState {
+  const holder = AXES.find((k) => k !== axis && s[k].dim === dim && dim !== "__all");
+  if (holder) return { ...s, [axis]: s[holder], [holder]: s[axis] };
+  return { ...s, [axis]: { dim, pins: [] } };
 }
 
-/** Bind a hierarchy to an axis; if another axis holds it, the two swap. */
-export function assignHierarchy(s: OlapState, axis: AxisKey, hier: HierarchyKey): OlapState {
-  const holder = AXES.find((k) => s[k].hier === hier);
-  if (holder === axis) return s;
-  if (holder) return swapAxes(s, axis, holder);
-  return { ...s, [axis]: { hier, depth: 0, path: [] } };
+export function olapRequest(s: OlapState): AggregateRequest {
+  return {
+    dims: [s.x.dim, s.y.dim, s.z.dim],
+    measures: [s.measure],
+    filters: [...s.x.pins, ...s.y.pins, ...s.z.pins],
+    fact: s.fact
+  };
 }
-
-export const unusedHierarchy = (s: OlapState): HierarchyKey | undefined =>
-  (Object.keys(HIERARCHIES) as HierarchyKey[]).find((h) => !AXES.some((k) => s[k].hier === h));
 
 // ---------------------------------------------------------------------------
 // Grid construction

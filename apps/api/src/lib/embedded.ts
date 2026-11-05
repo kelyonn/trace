@@ -1,25 +1,14 @@
 /**
- * Embedded query engine: an in-process Postgres (PGlite / WASM) seeded with the
- * synthetic demo dataset. Used when Trino is not reachable so Trace runs end to
- * end without Docker. Results are paged to mimic Trino's nextUri protocol, so
- * streaming and "load more" work unchanged.
+ * The built-in "Retail demo" source: an in-process Postgres (PGlite / WASM)
+ * seeded with a deterministic synthetic dataset, so Trace runs end to end
+ * without Docker or any external database.
  */
-import { randomUUID } from "crypto";
 import { mkdirSync } from "fs";
 import type { PGlite as PGliteType } from "@electric-sql/pglite";
 import { generateDemoData, DEMO_START, DEMO_END } from "./demo-data.js";
 import { resolveRepoPath } from "./paths.js";
 
 const SEED_VERSION = "trace-demo-v2";
-const PAGE_SIZE = Number(process.env.EMBEDDED_PAGE_SIZE ?? "1000");
-const PAGE_TTL_MS = 10 * 60 * 1000;
-
-export const EMBEDDED_URI_PREFIX = "embedded://";
-
-type Column = { name: string; type: string };
-export type EmbeddedPage = { data?: unknown[][]; columns?: Column[]; nextUri?: string };
-
-const pages = new Map<string, { columns: Column[]; rows: unknown[][]; expires: number }>();
 
 let dbPromise: Promise<PGliteType> | null = null;
 let seedInfo: { seeded: boolean; seedMs: number; counts: Record<string, number> } = {
@@ -28,22 +17,6 @@ let seedInfo: { seeded: boolean; seedMs: number; counts: Record<string, number> 
   counts: {}
 };
 
-const TYPE_NAMES: Record<number, string> = {
-  16: "boolean",
-  20: "bigint",
-  21: "smallint",
-  23: "integer",
-  25: "varchar",
-  700: "real",
-  701: "double",
-  1042: "char",
-  1043: "varchar",
-  1082: "date",
-  1114: "timestamp",
-  1184: "timestamp with time zone",
-  1700: "decimal",
-  19: "varchar"
-};
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS customers (
@@ -191,51 +164,4 @@ export function translateSql(sql: string): string {
   out = out.replace(/^EXPLAIN\s*\(\s*TYPE\s+\w+\s*\)/i, "EXPLAIN");
   out = out.replace(/\bpostgres\.public\./gi, "");
   return out;
-}
-
-function sweepPages(): void {
-  const now = Date.now();
-  for (const [key, page] of pages) {
-    if (page.expires < now) pages.delete(key);
-  }
-}
-
-function pageFrom(id: string, offset: number): EmbeddedPage {
-  const entry = pages.get(id);
-  if (!entry) throw new Error("Embedded result page expired");
-  const data = entry.rows.slice(offset, offset + PAGE_SIZE);
-  const nextOffset = offset + PAGE_SIZE;
-  const hasMore = nextOffset < entry.rows.length;
-  if (!hasMore) pages.delete(id);
-  return {
-    columns: entry.columns,
-    data,
-    nextUri: hasMore ? `${EMBEDDED_URI_PREFIX}${id}/${nextOffset}` : undefined
-  };
-}
-
-export async function embeddedStatement(sql: string): Promise<EmbeddedPage> {
-  const db = await getEmbeddedDb();
-  const translated = translateSql(sql);
-  const result = await db.transaction(async (tx) => {
-    await tx.exec("SET TRANSACTION READ ONLY");
-    return tx.query<unknown[]>(translated, [], { rowMode: "array" });
-  });
-  const columns: Column[] = result.fields.map((f) => ({
-    name: f.name,
-    type: TYPE_NAMES[f.dataTypeID] ?? "varchar"
-  }));
-  const rows = (result.rows as unknown[][]).map((row) =>
-    row.map((v) => (v instanceof Date ? v.toISOString().slice(0, 10) : typeof v === "bigint" ? Number(v) : v))
-  );
-  sweepPages();
-  const id = randomUUID();
-  pages.set(id, { columns, rows, expires: Date.now() + PAGE_TTL_MS });
-  return pageFrom(id, 0);
-}
-
-export async function embeddedNext(nextUri: string): Promise<EmbeddedPage> {
-  const rest = nextUri.slice(EMBEDDED_URI_PREFIX.length);
-  const [id, offsetRaw] = rest.split("/");
-  return pageFrom(id, Number(offsetRaw) || 0);
 }

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { collectTrino } from "../lib/trino.js";
+import { collect } from "../lib/engine.js";
 import { evaluatePolicy } from "../lib/policy.js";
 import { maskRows } from "../lib/auth.js";
 
@@ -33,7 +33,7 @@ export default async function assistantRoutes(fastify: FastifyInstance): Promise
       }
 
       try {
-        const result = await collectTrino(sql, 3);
+        const result = await collect(sql, 3);
         const { columns } = result;
         const rows = maskRows(columns, result.rows, role, colsToMask);
 
@@ -69,7 +69,7 @@ export default async function assistantRoutes(fastify: FastifyInstance): Promise
       } catch (err) {
         return reply.status(502).send({
           error: {
-            code: "TRINO_ERROR",
+            code: "QUERY_ERROR",
             message: "Assistant summary failed",
             details: err instanceof Error ? err.message : "Unknown error"
           }

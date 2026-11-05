@@ -39,3 +39,5 @@ export type QueryPayload = {
   cacheHit?: boolean;
   maskColumns?: string[];
 };
+
+export type StatusPayload = import("@trace/shared-types").StatusResponse;
