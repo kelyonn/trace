@@ -4,6 +4,7 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 
 import { initStores } from "./lib/store.js";
+import { resolveEngine, getEmbeddedDb } from "./lib/trino.js";
 import { attachTraceHooks } from "./lib/request-context.js";
 
 import statusRoutes from "./routes/status.js";
@@ -52,6 +53,14 @@ const port = Number(process.env.PORT ?? "3000");
 
 try {
   await server.listen({ host, port });
+  const engine = await resolveEngine();
+  server.log.info(`query engine: ${engine}`);
+  if (engine === "embedded") {
+    // Warm up and seed in the background so the first query is fast.
+    getEmbeddedDb((msg) => server.log.info(msg)).catch((err) =>
+      server.log.error({ err }, "embedded engine failed to start")
+    );
+  }
 } catch (err) {
   server.log.error(err);
   process.exit(1);

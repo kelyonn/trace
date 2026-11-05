@@ -17,7 +17,7 @@ export type AuthState =
   | { status: "authenticated"; tokens: TokenSet }
   | { status: "error"; message: string };
 
-function base64url(bytes: ArrayBuffer): string {
+function base64url(bytes: ArrayBuffer | Uint8Array): string {
   return btoa(String.fromCharCode(...new Uint8Array(bytes)))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")

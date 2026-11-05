@@ -17,6 +17,12 @@ export const initialSql = CUBE_BY_STATUS_REGION;
 export const quickQueryTemplates: Record<string, string> = {
   cube_by_status_region: CUBE_BY_STATUS_REGION,
   cube_by_industry_category: CUBE_BY_INDUSTRY_CATEGORY,
+  monthly_revenue: `SELECT CAST(date_trunc('month', o.order_date) AS DATE) AS month, c.region, SUM(o.amount) AS revenue
+FROM orders o
+JOIN customers c ON c.id = o.customer_id
+WHERE o.status <> 'cancelled'
+GROUP BY 1, 2
+ORDER BY 1;`,
   orders_by_status: `SELECT status, COUNT(*) AS order_count, SUM(amount) AS total_amount
 FROM orders
 GROUP BY status

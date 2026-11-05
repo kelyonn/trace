@@ -107,8 +107,21 @@ export type SemanticModel = {
   cubes: SemanticCube[];
 };
 
+export type EngineInfo = {
+  kind: "trino" | "embedded";
+  mode: string;
+  label: string;
+  dataset?: {
+    seeded: boolean;
+    seedMs: number;
+    counts: Record<string, number>;
+    range: { start: string; end: string };
+  };
+};
+
 export type StatusResponse = {
   activeSourceId: string;
+  engine?: EngineInfo;
   trino: { ok: boolean; version: string | null; error: string | null };
   postgres: { ok: boolean; error: string | null };
   demo?: {
