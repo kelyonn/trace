@@ -6,20 +6,19 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@trace/shared-types": "*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "three": "^0.166.1",
-    "vega": "^6.2.0",
-    "vega-embed": "^7.1.0",
-    "vega-lite": "^6.4.3"
+    "three": "^0.166.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
+    "@types/three": "^0.166.0",
     "@vitejs/plugin-react": "^4.3.1",
     "typescript": "^5.5.4",
     "vite": "^5.3.5",

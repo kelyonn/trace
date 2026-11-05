@@ -10,6 +10,8 @@ vi.mock("../lib/trino.js", () => ({
     nextUri: undefined
   }),
   fetchTrinoNext: vi.fn().mockResolvedValue({ columns: [], data: [], nextUri: undefined }),
+  engineStatus: vi.fn().mockResolvedValue({ kind: "trino", mode: "auto", trinoVersion: "test", trinoError: null }),
+  embeddedInfo: vi.fn().mockReturnValue({ seeded: false, seedMs: 0, counts: {} }),
   collectTrino: vi.fn().mockResolvedValue({
     columns: [{ name: "count", type: "integer" }],
     rows: [[42]],

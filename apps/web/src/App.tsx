@@ -1,260 +1,372 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AlertRule, AssistantSummary, DataSource, HistoryItem, Notebook, Snapshot } from "@trace/shared-types";
 import { useAuth } from "./hooks/useAuth";
 import { useQueryStream } from "./hooks/useQueryStream";
-import { apiBase, apiOrigin } from "./config";
-import { canPivot, detectPivot } from "./cube/pivot";
+import { apiOrigin } from "./config";
+import { detectPivot } from "./cube/pivot";
 import { buildDrillSql, pivotContextFromClick } from "./cube/drill";
-import {
-  initialSql,
-  defaultQuickQuery,
-  quickQueryTemplates
-} from "./demo-queries";
-import AppShell from "./layout/AppShell";
-import ConnectionPanel from "./panels/ConnectionPanel";
-import SchemaPanel from "./panels/SchemaPanel";
-import BuildersPanel from "./panels/BuildersPanel";
-import QueryPanel from "./panels/QueryPanel";
-import ResultsPanel from "./panels/ResultsPanel";
-import GovernancePanel from "./panels/GovernancePanel";
-import AccessPanel from "./panels/AccessPanel";
+import { DEFAULT_CUBE, type CubeState } from "./cube/model";
+import { initialSql } from "./demo-queries";
+import { makeRequester, type QueryPayload } from "./lib/api";
+import AppShell, { type ViewKey, VIEWS } from "./layout/AppShell";
+import OverviewView from "./views/OverviewView";
+import ExploreView from "./views/ExploreView";
+import CubeStudioView from "./views/CubeStudioView";
+import ActivityView, { type Metrics } from "./views/ActivityView";
+import SettingsView from "./views/SettingsView";
+import Icon from "./components/Icon";
 import type { StatusPayload } from "./panels/types";
-import type {
-  QueryResponse,
-  Column,
-  HistoryItem,
-  DataSource,
-  Notebook,
-  Snapshot,
-  AssistantSummary,
-  AlertRule,
-  SemanticModel,
-  SemanticCube
-} from "@trace/shared-types";
 
-type QueryResult = Partial<QueryResponse> & {
-  columns: Column[];
-  rows: unknown[][];
-  nextUri: string | null;
+type Toast = { id: number; kind: "ok" | "bad" | "info"; text: string };
+
+const readView = (): ViewKey => {
+  const h = window.location.hash.replace(/^#\/?/, "") as ViewKey;
+  return VIEWS.some((v) => v.key === h) ? h : "overview";
 };
 
-type ColumnInfo = Column;
-
-type Metrics = {
-  totalQueries: number;
-  queryErrors: number;
-  cacheHits: number;
-  exports: number;
+const store = {
+  get: (k: string, d: string) => {
+    try {
+      return localStorage.getItem(k) ?? d;
+    } catch {
+      return d;
+    }
+  },
+  set: (k: string, v: string) => {
+    try {
+      localStorage.setItem(k, v);
+    } catch {
+      /* storage unavailable */
+    }
+  }
 };
 
 const App = () => {
   const { state: authState, login, logout, accessToken } = useAuth();
   const { state: streamState, runStream, cancel: cancelStream } = useQueryStream();
 
+  const [view, setView] = useState<ViewKey>(readView);
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "dark");
+  const [apiKey, setApiKey] = useState(() => store.get("trace_api_key", ""));
+  const [role, setRole] = useState(() => store.get("trace_role", "user"));
+
   const [sql, setSql] = useState(initialSql);
-  const [result, setResult] = useState<QueryResult | null>(null);
+  const [result, setResult] = useState<QueryPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<StatusPayload | null>(null);
-  const [schemaTables, setSchemaTables] = useState<string[]>([]);
-  const [selectedTable, setSelectedTable] = useState<string | null>(null);
-  const [tableColumns, setTableColumns] = useState<ColumnInfo[]>([]);
   const [plan, setPlan] = useState<string | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [quickQuery, setQuickQuery] = useState(defaultQuickQuery);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  const [status, setStatus] = useState<StatusPayload | null>(null);
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
-  const [builderTable, setBuilderTable] = useState<string | null>(null);
-  const [builderColumns, setBuilderColumns] = useState<string[]>([]);
-  const [builderLimit, setBuilderLimit] = useState(50);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("trace_api_key") ?? "");
-  const [role, setRole] = useState(() => localStorage.getItem("trace_role") ?? "user");
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [exportStatus, setExportStatus] = useState<string | null>(null);
-  const [notebooks, setNotebooks] = useState<Notebook[]>([]);
-  const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
-  const [notebookTitle, setNotebookTitle] = useState("");
-  const [notebookContent, setNotebookContent] = useState("");
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [assistantSummary, setAssistantSummary] = useState<AssistantSummary | null>(null);
-  const [alertName, setAlertName] = useState("New alert");
-  const [alertComparison, setAlertComparison] = useState<AlertRule["comparison"]>(">");
-  const [alertThreshold, setAlertThreshold] = useState(1000);
+  const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [alerts, setAlerts] = useState<AlertRule[]>([]);
-  const [semanticModel, setSemanticModel] = useState<SemanticModel | null>(null);
-  const [selectedCube, setSelectedCube] = useState<SemanticCube | null>(null);
-  const [selectedMeasure, setSelectedMeasure] = useState<string>("");
-  const [selectedDimensions, setSelectedDimensions] = useState<string[]>([]);
-  const [cubeMode, setCubeMode] = useState(true);
+  const [assistant, setAssistant] = useState<AssistantSummary | null>(null);
+  const [cubeState, setCubeState] = useState<CubeState>(DEFAULT_CUBE);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [toasts, setToasts] = useState<Toast[]>([]);
 
-
-  const getHeaders = () => {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    // Prefer Keycloak JWT when available; fall back to manual API key
+  const headersRef = useRef<Record<string, string>>({});
+  const headers = useMemo(() => {
+    const h: Record<string, string> = { "Content-Type": "application/json" };
     const token = accessToken ?? (apiKey.trim() || null);
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    if (role) {
-      headers["x-trace-role"] = role;
-    }
-    return headers;
-  };
+    if (token) h.Authorization = `Bearer ${token}`;
+    if (role) h["x-trace-role"] = role;
+    return h;
+  }, [accessToken, apiKey, role]);
+  headersRef.current = headers;
+
+  // A new requester identity whenever credentials change → views refetch.
+  const request = useMemo(() => makeRequester(() => headersRef.current), [headers]);
+
+  const toast = useCallback((kind: Toast["kind"], text: string) => {
+    const id = Date.now() + Math.random();
+    setToasts((t) => [...t, { id, kind, text }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
+  }, []);
+
+  const navigate = useCallback((v: ViewKey) => {
+    setView(v);
+    if (window.location.hash !== `#/${v}`) window.history.pushState(null, "", `#/${v}`);
+  }, []);
 
   useEffect(() => {
-    const loadStatus = async () => {
-      try {
-        const response = await fetch(`${apiBase}/status`, { headers: getHeaders() });
-        if (!response.ok) {
-          throw new Error("Status check failed");
-        }
-        const payload = (await response.json()) as StatusPayload;
-        setStatus(payload);
-      } catch (err) {
-        setStatusError(err instanceof Error ? err.message : "Status check failed");
-      }
+    const onHash = () => setView(readView());
+    window.addEventListener("popstate", onHash);
+    window.addEventListener("hashchange", onHash);
+    return () => {
+      window.removeEventListener("popstate", onHash);
+      window.removeEventListener("hashchange", onHash);
     };
+  }, []);
 
-    const loadTables = async () => {
-      try {
-        const response = await fetch(`${apiBase}/schema`, { headers: getHeaders() });
-        if (!response.ok) {
-          throw new Error("Schema fetch failed");
-        }
-        const payload = (await response.json()) as { tables: string[] };
-        setSchemaTables(payload.tables ?? []);
-      } catch (err) {
-        setStatusError(err instanceof Error ? err.message : "Schema fetch failed");
-      }
-    };
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    store.set("trace_theme", next);
+    setTheme(next);
+  };
 
-    const loadHistory = async () => {
-      try {
-        const response = await fetch(`${apiBase}/history`, { headers: getHeaders() });
-        if (!response.ok) {
-          throw new Error("History fetch failed");
-        }
-        const payload = (await response.json()) as { items: HistoryItem[] };
-        setHistory(payload.items ?? []);
-      } catch (err) {
-        setStatusError(err instanceof Error ? err.message : "History fetch failed");
-      }
-    };
+  const loadStatus = useCallback(async () => {
+    try {
+      setStatus(await request<StatusPayload>("/status"));
+    } catch {
+      setStatus(null);
+    }
+  }, [request]);
 
-    loadStatus();
-    loadTables();
-    loadHistory();
+  const loadMeta = useCallback(async () => {
+    const results = await Promise.allSettled([
+      request<{ items: DataSource[]; activeSourceId?: string }>("/data-sources"),
+      request<{ items: HistoryItem[] }>("/history"),
+      request<Metrics>("/metrics"),
+      request<{ items: Snapshot[] }>("/snapshots"),
+      request<{ items: Notebook[] }>("/notebooks"),
+      request<{ items: AlertRule[] }>("/alerts")
+    ]);
+    const [src, hist, met, snap, nb, al] = results;
+    if (src.status === "fulfilled") {
+      setDataSources(src.value.items ?? []);
+      setActiveSourceId(src.value.activeSourceId ?? null);
+    }
+    if (hist.status === "fulfilled") setHistory(hist.value.items ?? []);
+    if (met.status === "fulfilled") setMetrics(met.value);
+    if (snap.status === "fulfilled") setSnapshots(snap.value.items ?? []);
+    if (nb.status === "fulfilled") setNotebooks(nb.value.items ?? []);
+    if (al.status === "fulfilled") setAlerts(al.value.items ?? []);
+  }, [request]);
 
-    const loadSources = async () => {
-      try {
-        const response = await fetch(`${apiBase}/data-sources`, { headers: getHeaders() });
-        if (!response.ok) {
-          throw new Error("Data sources fetch failed");
-        }
-        const payload = (await response.json()) as { items: DataSource[]; activeSourceId?: string };
-        setDataSources(payload.items ?? []);
-        setActiveSourceId(payload.activeSourceId ?? null);
-      } catch (err) {
-        setStatusError(err instanceof Error ? err.message : "Data sources fetch failed");
-      }
-    };
+  useEffect(() => {
+    void loadStatus();
+    void loadMeta();
+  }, [loadStatus, loadMeta]);
 
-    loadSources();
+  // Keep metrics/history fresh when switching to Activity.
+  useEffect(() => {
+    if (view === "activity") void loadMeta();
+  }, [view, loadMeta]);
 
-    const loadMetrics = async () => {
-      try {
-        const response = await fetch(`${apiBase}/metrics`, { headers: getHeaders() });
-        if (!response.ok) {
-          throw new Error("Metrics fetch failed");
-        }
-        const payload = (await response.json()) as Metrics;
-        setMetrics(payload);
-      } catch (err) {
-        setStatusError(err instanceof Error ? err.message : "Metrics fetch failed");
-      }
-    };
-
-    loadMetrics();
-
-    const loadNotebooks = async () => {
-      try {
-        const response = await fetch(`${apiBase}/notebooks`, { headers: getHeaders() });
-        if (!response.ok) {
-          throw new Error("Notebook fetch failed");
-        }
-        const payload = (await response.json()) as { items: Notebook[] };
-        setNotebooks(payload.items ?? []);
-      } catch (err) {
-        setStatusError(err instanceof Error ? err.message : "Notebook fetch failed");
-      }
-    };
-
-    const loadSnapshots = async () => {
-      try {
-        const response = await fetch(`${apiBase}/snapshots`, { headers: getHeaders() });
-        if (!response.ok) {
-          throw new Error("Snapshot fetch failed");
-        }
-        const payload = (await response.json()) as { items: Snapshot[] };
-        setSnapshots(payload.items ?? []);
-      } catch (err) {
-        setStatusError(err instanceof Error ? err.message : "Snapshot fetch failed");
-      }
-    };
-
-    const loadAlerts = async () => {
-      try {
-        const response = await fetch(`${apiBase}/alerts`, { headers: getHeaders() });
-        if (!response.ok) {
-          throw new Error("Alert fetch failed");
-        }
-        const payload = (await response.json()) as { items: AlertRule[] };
-        setAlerts(payload.items ?? []);
-      } catch (err) {
-        setStatusError(err instanceof Error ? err.message : "Alert fetch failed");
-      }
-    };
-
-    loadNotebooks();
-    loadSnapshots();
-    loadAlerts();
-
-    const loadSemantic = async () => {
-      try {
-        const response = await fetch(`${apiBase}/semantic`, { headers: getHeaders() });
-        if (!response.ok) return;
-        const payload = (await response.json()) as SemanticModel;
-        setSemanticModel(payload);
-        if (payload.cubes?.length) {
-          setSelectedCube(payload.cubes[0]);
-          const firstMeasure = payload.cubes[0]?.measures?.[0]?.name ?? "";
-          setSelectedMeasure(firstMeasure);
-        }
-      } catch {
-        // semantic model is optional — no error surfaced to user
-      }
-    };
-    loadSemantic();
-  }, [apiKey, role]);
+  // Embedded engine may still be seeding on first boot: poll status until ready.
+  useEffect(() => {
+    if (status?.demo?.seeded) return;
+    const t = setTimeout(() => void loadStatus(), 3000);
+    return () => clearTimeout(t);
+  }, [status, loadStatus]);
 
   useEffect(() => {
     if (!accessToken) return;
     try {
-      const payload = JSON.parse(atob(accessToken.split(".")[1])) as {
-        realm_access?: { roles?: string[] };
-      };
+      const payload = JSON.parse(atob(accessToken.split(".")[1])) as { realm_access?: { roles?: string[] } };
       const roles = payload.realm_access?.roles ?? [];
-      if (roles.includes("admin")) {
-        setRole("admin");
-        localStorage.setItem("trace_role", "admin");
-      } else if (roles.includes("analyst")) {
-        setRole("user");
-        localStorage.setItem("trace_role", "user");
-      }
+      const next = roles.includes("admin") ? "admin" : "user";
+      setRole(next);
+      store.set("trace_role", next);
     } catch {
-      /* ignore malformed token */
+      /* malformed token */
     }
   }, [accessToken]);
+
+  const runQuery = useCallback(
+    async (override?: string) => {
+      const q = override ?? sql;
+      setLoading(true);
+      setError(null);
+      setPlan(null);
+      try {
+        const payload = await request<QueryPayload>("/query", { body: { sql: q } });
+        setResult(payload);
+        if (payload.queryId && !payload.cacheHit) {
+          setHistory((prev) => [
+            {
+              id: payload.queryId as string,
+              sql: q,
+              submittedAt: new Date().toISOString(),
+              durationMs: payload.durationMs ?? 0,
+              rowCount: payload.rowCount ?? 0,
+              status: "completed",
+              dataSourceId: activeSourceId ?? "unknown"
+            },
+            ...prev
+          ]);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Request failed");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [sql, request, activeSourceId]
+  );
+
+  const openSql = useCallback(
+    (q: string, run = true) => {
+      setSql(q);
+      navigate("explore");
+      if (run) void runQuery(q);
+    },
+    [navigate, runQuery]
+  );
+
+  const openCube = useCallback(
+    (state?: CubeState) => {
+      if (state) setCubeState(state);
+      navigate("cube");
+    },
+    [navigate]
+  );
+
+  const loadMore = async () => {
+    if (!result?.nextUri) return;
+    setLoading(true);
+    try {
+      const payload = await request<QueryPayload>("/query/next", {
+        body: { nextUri: result.nextUri, columns: result.columns }
+      });
+      setResult({
+        ...result,
+        rows: [...result.rows, ...payload.rows],
+        rowCount: result.rows.length + payload.rows.length,
+        nextUri: payload.nextUri
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Request failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const explain = async () => {
+    setPlan(null);
+    setError(null);
+    try {
+      const payload = await request<{ plan: string }>("/explain", { body: { sql } });
+      setPlan(payload.plan);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Explain failed");
+    }
+  };
+
+  const exportCsv = async () => {
+    try {
+      const payload = await request<{ downloadUrl: string }>("/exports", { body: { sql, format: "csv" } });
+      window.open(`${apiOrigin}${payload.downloadUrl}`, "_blank");
+      toast("ok", "Export ready — download started");
+    } catch (err) {
+      toast("bad", err instanceof Error ? err.message : "Export failed");
+    }
+  };
+
+  const handleDrill = (rowLabel: string, colLabel: string) => {
+    const pivot = result ? detectPivot(result.columns, result.rows) : null;
+    if (!pivot) return;
+    const drillSql = buildDrillSql(pivotContextFromClick(pivot, rowLabel, colLabel), sql);
+    if (drillSql) {
+      setSql(drillSql);
+      toast("info", `Drill-through SQL for ${rowLabel} · ${colLabel} is in the editor`);
+    } else {
+      toast("info", "Open Cube Studio for multi-level drill-down on this shape");
+    }
+  };
+
+  const createSnapshot = async () => {
+    const summary = result
+      ? `${(result.rowCount ?? result.rows.length).toLocaleString()} rows · ${result.durationMs ?? 0} ms`
+      : "No results";
+    try {
+      const snap = await request<Snapshot>("/snapshots", {
+        body: { name: `Snapshot ${new Date().toLocaleString()}`, sql, summary }
+      });
+      setSnapshots((prev) => [snap, ...prev]);
+      toast("ok", "Snapshot saved");
+    } catch (err) {
+      toast("bad", err instanceof Error ? err.message : "Snapshot failed");
+    }
+  };
+
+  const runAssistant = async () => {
+    try {
+      setAssistant(await request<AssistantSummary>("/assistant/summary", { body: { sql } }));
+    } catch (err) {
+      toast("bad", err instanceof Error ? err.message : "Assistant failed");
+    }
+  };
+
+  const saveNotebook = async (n: { id?: string; title: string; content: string }) => {
+    try {
+      const saved = n.id
+        ? await request<Notebook>(`/notebooks/${n.id}`, { method: "PUT", body: { title: n.title, content: n.content } })
+        : await request<Notebook>("/notebooks", { body: { title: n.title, content: n.content } });
+      setNotebooks((prev) => [saved, ...prev.filter((x) => x.id !== saved.id)]);
+      toast("ok", "Notebook saved");
+      return saved;
+    } catch (err) {
+      toast("bad", err instanceof Error ? err.message : "Notebook save failed");
+      return null;
+    }
+  };
+
+  const createAlert = async (a: { name: string; comparison: AlertRule["comparison"]; threshold: number }) => {
+    try {
+      const created = await request<AlertRule>("/alerts", { body: { ...a, sql } });
+      setAlerts((prev) => [created, ...prev]);
+      toast("ok", `Alert “${created.name}” created on the current query`);
+    } catch (err) {
+      toast("bad", err instanceof Error ? err.message : "Alert create failed");
+    }
+  };
+
+  const evaluateAlert = async (alert: AlertRule) => {
+    try {
+      const r = await request<{ id: string; value: number | null; triggered: boolean }>(`/alerts/${alert.id}/evaluate`, {
+        method: "POST",
+        body: {}
+      });
+      setAlerts((prev) =>
+        prev.map((x) =>
+          x.id === r.id
+            ? {
+                ...x,
+                lastValue: r.value ?? undefined,
+                lastTriggeredAt: r.triggered ? new Date().toISOString() : undefined
+              }
+            : x
+        )
+      );
+      toast(r.triggered ? "bad" : "ok", r.triggered ? `${alert.name}: threshold crossed (${r.value})` : `${alert.name}: within threshold`);
+    } catch (err) {
+      toast("bad", err instanceof Error ? err.message : "Alert evaluation failed");
+    }
+  };
+
+  const activateSource = async (id: string) => {
+    const source = dataSources.find((s) => s.id === id);
+    if (source?.status === "auth_required" && !accessToken) {
+      sessionStorage.setItem("trace_pending_source", id);
+      await login(id);
+      return;
+    }
+    try {
+      const payload = await request<{ activeSourceId: string; status?: DataSource["status"] }>(
+        `/data-sources/${id}/activate`,
+        { method: "POST", body: {} }
+      );
+      setActiveSourceId(payload.activeSourceId);
+      setDataSources((prev) => prev.map((s) => (s.id === id ? { ...s, status: payload.status ?? "connected" } : s)));
+      toast("ok", `Connected to ${source?.name ?? id}`);
+      void loadStatus();
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      const e = err as Error & { code?: string };
+      if (e.code === "AUTH_REQUIRED") {
+        await login(id);
+        return;
+      }
+      toast("bad", e.message);
+    }
+  };
 
   useEffect(() => {
     const onAuthComplete = () => {
@@ -265,541 +377,151 @@ const App = () => {
     };
     window.addEventListener("trace:auth-complete", onAuthComplete);
     return () => window.removeEventListener("trace:auth-complete", onAuthComplete);
-  }, [accessToken]);
+  });
 
-  const runQuery = async (overrideSql?: string) => {
-    const querySql = overrideSql ?? sql;
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`${apiBase}/query`, {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({ sql: querySql })
-      });
-
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload?.error?.message ?? "Request failed");
-      }
-
-      const payload = (await response.json()) as QueryResult;
-      setResult(payload);
-      if (canPivot(payload.columns, payload.rows)) {
-        setCubeMode(true);
-      }
-      if (payload.queryId) {
-        setHistory((prev) => [
-          {
-            id: payload.queryId as string,
-            sql: querySql,
-            submittedAt: new Date().toISOString(),
-            durationMs: payload.durationMs ?? 0,
-            rowCount: payload.rowCount ?? 0,
-            status: "completed",
-            dataSourceId: activeSourceId ?? "unknown"
-          },
-          ...prev
-        ]);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const applyQuickQuery = (value: string) => {
-    setQuickQuery(value);
-    setSql(quickQueryTemplates[value] ?? sql);
-  };
-
-  const handleDrill = useCallback(
-    (rowLabel: string, colLabel: string) => {
-      const pivot = result ? detectPivot(result.columns, result.rows) : null;
-      if (!pivot) return;
-      const ctx = pivotContextFromClick(pivot, rowLabel, colLabel);
-      const drillSql = buildDrillSql(ctx, sql);
-      if (drillSql) {
-        setSql(drillSql);
-      }
-    },
-    [result, sql]
-  );
-
-  const runDemoQuery = useCallback(
-    (demoSql: string) => {
-      setSql(demoSql);
-      setQuickQuery("cube_by_status_region");
-      void runQuery(demoSql);
-    },
-    [sql, apiKey, role, accessToken, activeSourceId]
-  );
-
-  const loadMore = async () => {
-    if (!result?.nextUri) {
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`${apiBase}/query/next`, {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({ nextUri: result.nextUri, columns: result.columns })
-      });
-
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload?.error?.message ?? "Request failed");
-      }
-
-      const payload = (await response.json()) as QueryResult;
-      setResult({
-        columns: payload.columns.length ? payload.columns : result.columns,
-        rows: [...result.rows, ...payload.rows],
-        nextUri: payload.nextUri
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadColumns = async (tableName: string) => {
-    setSelectedTable(tableName);
-    setTableColumns([]);
-    setStatusError(null);
-    try {
-      const response = await fetch(`${apiBase}/schema?table=${tableName}`, { headers: getHeaders() });
-      if (!response.ok) {
-        throw new Error("Column fetch failed");
-      }
-      const payload = (await response.json()) as { columns: ColumnInfo[] };
-      setTableColumns(payload.columns ?? []);
-      setBuilderTable(tableName);
-      setBuilderColumns(payload.columns?.map((column) => column.name) ?? []);
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Column fetch failed");
-    }
-  };
-
-  const previewTable = async () => {
-    if (!selectedTable) {
-      return;
-    }
-    setSql(`SELECT * FROM ${selectedTable} LIMIT 20;`);
-    await runQuery();
-  };
-
-  const toggleColumn = (column: string) => {
-    setBuilderColumns((prev) =>
-      prev.includes(column) ? prev.filter((item) => item !== column) : [...prev, column]
-    );
-  };
-
-  const buildSql = () => {
-    if (!builderTable) {
-      setStatusError("Select a table to build a query.");
-      return;
-    }
-    const columns = builderColumns.length ? builderColumns.join(", ") : "*";
-    const limit = Number.isFinite(builderLimit) ? Math.max(1, builderLimit) : 50;
-    setSql(`SELECT ${columns} FROM ${builderTable} LIMIT ${limit};`);
-  };
-
-  const buildSemanticSql = () => {
-    if (!selectedCube || !selectedMeasure) {
-      setStatusError("Select a cube and measure to build a semantic query.");
-      return;
-    }
-    const cube = selectedCube;
-    const measure = cube.measures.find((m) => m.name === selectedMeasure);
-    if (!measure) return;
-
-    const aggFn = (() => {
-      switch (measure.type) {
-        case "sum": return "SUM";
-        case "count": return "COUNT";
-        case "avg": return "AVG";
-        case "min": return "MIN";
-        case "max": return "MAX";
-        case "count_distinct": return "COUNT(DISTINCT";
-        default: return "SUM";
-      }
-    })();
-    const measureExpr = measure.type === "count_distinct"
-      ? `${aggFn} ${measure.sql}) AS ${measure.name}`
-      : `${aggFn}(${measure.sql}) AS ${measure.name}`;
-
-    if (selectedDimensions.length === 0) {
-      setSql(`SELECT ${measureExpr} FROM ${cube.name};`);
-    } else {
-      const dims = selectedDimensions.join(", ");
-      setSql(`SELECT ${dims}, ${measureExpr} FROM ${cube.name} GROUP BY ${selectedDimensions.map((_, i) => i + 1).join(", ")} ORDER BY ${selectedDimensions.length + 1} DESC;`);
-    }
-  };
-
-  const activateSource = async (id: string) => {
-    setStatusError(null);
-    const source = dataSources.find((s) => s.id === id);
-    if (source?.status === "auth_required" && !accessToken) {
-      await login(id);
-      return;
-    }
-    try {
-      const response = await fetch(`${apiBase}/data-sources/${id}/activate`, {
-        method: "POST",
-        headers: getHeaders()
-      });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        if (body?.error?.code === "AUTH_REQUIRED") {
-          await login(id);
-          return;
-        }
-        throw new Error(body?.error?.message ?? "Failed to activate source");
-      }
-      const payload = (await response.json()) as { activeSourceId: string; status?: string };
-      setActiveSourceId(payload.activeSourceId);
-      setDataSources((prev) =>
-        prev.map((s) =>
-          s.id === id ? { ...s, status: (payload.status as DataSource["status"]) ?? "connected" } : s
-        )
-      );
-      await Promise.all([loadSchemaTables(), loadStatusOnly()]);
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Failed to activate source");
-    }
-  };
-
-  const loadSchemaTables = async () => {
-    try {
-      const response = await fetch(`${apiBase}/schema`, { headers: getHeaders() });
-      if (!response.ok) {
-        throw new Error("Schema fetch failed");
-      }
-      const payload = (await response.json()) as { tables: string[] };
-      setSchemaTables(payload.tables ?? []);
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Schema fetch failed");
-    }
-  };
-
-  const loadStatusOnly = async () => {
-    try {
-      const response = await fetch(`${apiBase}/status`, { headers: getHeaders() });
-      if (!response.ok) {
-        throw new Error("Status check failed");
-      }
-      const payload = (await response.json()) as StatusPayload;
-      setStatus(payload);
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Status check failed");
-    }
-  };
-
-  const fillFromHistory = (item: HistoryItem) => {
-    setSql(item.sql);
-  };
-
-  const explainQuery = async () => {
-    setPlan(null);
-    setStatusError(null);
-    try {
-      const response = await fetch(`${apiBase}/explain`, {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({ sql })
-      });
-
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload?.error?.message ?? "Explain failed");
-      }
-
-      const payload = (await response.json()) as { plan: string };
-      setPlan(payload.plan);
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Explain failed");
-    }
-  };
-
-  const createNotebook = async () => {
-    try {
-      const response = await fetch(`${apiBase}/notebooks`, {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({ title: notebookTitle || "Untitled", content: notebookContent })
-      });
-      if (!response.ok) {
-        throw new Error("Notebook create failed");
-      }
-      const payload = (await response.json()) as Notebook;
-      setNotebooks((prev) => [payload, ...prev]);
-      setActiveNotebookId(payload.id);
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Notebook create failed");
-    }
-  };
-
-  const saveNotebook = async () => {
-    if (!activeNotebookId) {
-      return;
-    }
-    try {
-      const response = await fetch(`${apiBase}/notebooks/${activeNotebookId}`, {
-        method: "PUT",
-        headers: getHeaders(),
-        body: JSON.stringify({ title: notebookTitle, content: notebookContent })
-      });
-      if (!response.ok) {
-        throw new Error("Notebook save failed");
-      }
-      const payload = (await response.json()) as Notebook;
-      setNotebooks((prev) => prev.map((item) => (item.id === payload.id ? payload : item)));
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Notebook save failed");
-    }
-  };
-
-  const selectNotebook = (notebook: Notebook) => {
-    setActiveNotebookId(notebook.id);
-    setNotebookTitle(notebook.title);
-    setNotebookContent(notebook.content);
-  };
-
-  const createSnapshot = async () => {
-    const summary = result
-      ? `Rows: ${result.rowCount ?? result.rows.length}, Duration: ${result.durationMs ?? 0} ms`
-      : "No results";
-    try {
-      const response = await fetch(`${apiBase}/snapshots`, {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({ name: `Snapshot ${new Date().toLocaleTimeString()}`, sql, summary })
-      });
-      if (!response.ok) {
-        throw new Error("Snapshot create failed");
-      }
-      const payload = (await response.json()) as Snapshot;
-      setSnapshots((prev) => [payload, ...prev]);
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Snapshot create failed");
-    }
-  };
-
-  const runAssistant = async () => {
-    setAssistantSummary(null);
-    try {
-      const response = await fetch(`${apiBase}/assistant/summary`, {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({ sql })
-      });
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload?.error?.message ?? "Assistant failed");
-      }
-      const payload = (await response.json()) as AssistantSummary;
-      setAssistantSummary(payload);
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Assistant failed");
-    }
-  };
-
-  const createAlert = async () => {
-    try {
-      const response = await fetch(`${apiBase}/alerts`, {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({
-          name: alertName,
-          sql,
-          comparison: alertComparison,
-          threshold: alertThreshold
-        })
-      });
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload?.error?.message ?? "Alert create failed");
-      }
-      const payload = (await response.json()) as AlertRule;
-      setAlerts((prev) => [payload, ...prev]);
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Alert create failed");
-    }
-  };
-
-  const evaluateAlert = async (alert: AlertRule) => {
-    try {
-      const response = await fetch(`${apiBase}/alerts/${alert.id}/evaluate`, {
-        method: "POST",
-        headers: getHeaders()
-      });
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload?.error?.message ?? "Alert evaluation failed");
-      }
-      const payload = (await response.json()) as { id: string; value: number | null; triggered: boolean };
-      setAlerts((prev) =>
-        prev.map((item) =>
-          item.id === payload.id
-            ? {
-                ...item,
-                lastValue: payload.value ?? undefined,
-                lastTriggeredAt: payload.triggered ? new Date().toISOString() : item.lastTriggeredAt
-              }
-            : item
-        )
-      );
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : "Alert evaluation failed");
-    }
-  };
+  const engineOk = status ? status.postgres.ok : null;
+  const activeSource = dataSources.find((s) => s.id === (activeSourceId ?? status?.activeSourceId));
+  const seeding = status && !status.demo?.seeded && status.engine?.kind === "embedded";
 
   return (
     <AppShell
-      hero={
-        <>
-          <p className="eyebrow">Trace</p>
-          <h1>Live OLAP exploration with a 3-D edge.</h1>
-          <p className="subhead">
-            Explore millions of rows through Trino — pivot in 3D, drill into slices, and export results.
-          </p>
-        </>
+      view={view}
+      onNavigate={navigate}
+      theme={theme}
+      onToggleTheme={toggleTheme}
+      engineLabel={status?.engine?.label ?? (status ? (status.trino.ok ? "Trino" : "Engine offline") : undefined)}
+      engineOk={engineOk}
+      role={role}
+      activeSourceName={activeSource?.name}
+      historyCount={history.length}
+      topActions={
+        <div className="segmented" title="Role (drives masking and policy)">
+          {["user", "admin"].map((r) => (
+            <button
+              key={r}
+              type="button"
+              className={role === r ? "active" : ""}
+              onClick={() => {
+                setRole(r);
+                store.set("trace_role", r);
+              }}
+            >
+              <Icon name={r === "admin" ? "key" : "users"} /> {r}
+            </button>
+          ))}
+        </div>
       }
-      left={
-        <>
-          <ConnectionPanel
-            status={status}
-            statusError={statusError}
-            activeSourceId={activeSourceId}
-            dataSources={dataSources}
-            onActivateSource={(id) => void activateSource(id)}
-          />
-          <SchemaPanel
-            schemaTables={schemaTables}
-            selectedTable={selectedTable}
-            tableColumns={tableColumns}
-            loading={loading}
-            onSelectTable={(t) => void loadColumns(t)}
-            onPreview={() => void previewTable()}
-          />
-          <BuildersPanel
-            semanticModel={semanticModel}
-            selectedCube={selectedCube}
-            selectedMeasure={selectedMeasure}
-            selectedDimensions={selectedDimensions}
-            schemaTables={schemaTables}
-            tableColumns={tableColumns}
-            builderTable={builderTable}
-            builderColumns={builderColumns}
-            builderLimit={builderLimit}
-            onCubeChange={(cube) => {
-              setSelectedCube(cube);
-              setSelectedMeasure(cube?.measures?.[0]?.name ?? "");
-              setSelectedDimensions([]);
-            }}
-            onMeasureChange={setSelectedMeasure}
-            onDimensionToggle={(dim) =>
-              setSelectedDimensions((prev) =>
-                prev.includes(dim) ? prev.filter((x) => x !== dim) : [...prev, dim]
-              )
-            }
-            onBuildSemanticSql={buildSemanticSql}
-            onBuilderTableChange={(t) => void loadColumns(t)}
-            onToggleColumn={toggleColumn}
-            onBuilderLimitChange={setBuilderLimit}
-            onBuildSql={buildSql}
-          />
-        </>
-      }
-      right={
-        <>
-          <QueryPanel
-            sql={sql}
-            quickQuery={quickQuery}
-            loading={loading}
-            error={error}
-            plan={plan}
-            streamState={streamState}
-            onSqlChange={setSql}
-            onQuickQueryChange={applyQuickQuery}
-            onExplain={() => void explainQuery()}
-            onStream={() => runStream(sql, getHeaders())}
-            onCancelStream={cancelStream}
-            onRun={() => void runQuery()}
-          />
-          <ResultsPanel
-            result={result}
-            sql={sql}
-            cubeMode={cubeMode}
-            loading={loading}
-            exportStatus={exportStatus}
-            apiOrigin={apiOrigin}
-            apiBase={apiBase}
-            headers={getHeaders()}
-            onToggleCubeMode={() => setCubeMode((v) => !v)}
-            onDrill={handleDrill}
-            onRunDemoQuery={runDemoQuery}
-            onLoadMore={() => void loadMore()}
-            onExportStatus={setExportStatus}
-          />
-        </>
-      }
-      governance={
-        <GovernancePanel
-          streamState={streamState}
-          assistantSummary={assistantSummary}
+    >
+      {seeding ? (
+        <div className="banner info">
+          <span className="spinner" />
+          <div>
+            <p className="status-title">Preparing the embedded demo dataset…</p>
+            <p className="muted">First boot generates ~80k orders; this takes a few seconds and only happens once.</p>
+          </div>
+        </div>
+      ) : null}
+      {status && !status.postgres.ok && !seeding ? (
+        <div className="banner warn">
+          <Icon name="alert" />
+          <div>
+            <p className="status-title">The query engine is unavailable</p>
+            <p className="muted">{status.postgres.error ?? "Start the API, or set ENGINE=embedded to run without Docker."}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {view === "overview" ? (
+        <OverviewView
+          request={request}
+          theme={theme}
+          refreshKey={refreshKey + (status?.demo?.seeded ? 1 : 0)}
+          engineLabel={status?.engine?.label}
+          onOpenSql={(q) => openSql(q)}
+          onOpenCube={openCube}
+        />
+      ) : null}
+      {view === "explore" ? (
+        <ExploreView
+          request={request}
+          theme={theme}
+          sql={sql}
+          onSqlChange={setSql}
+          result={result}
           loading={loading}
+          error={error}
+          plan={plan}
+          streamState={streamState}
+          onRun={(q) => void runQuery(q)}
+          onExplain={() => void explain()}
+          onStream={() => runStream(sql, headers)}
+          onCancelStream={cancelStream}
+          onLoadMore={() => void loadMore()}
+          onExport={() => void exportCsv()}
+          onSnapshot={() => void createSnapshot()}
+          onDrill={handleDrill}
+        />
+      ) : null}
+      {view === "cube" ? (
+        <CubeStudioView
+          request={request}
+          theme={theme}
+          state={cubeState}
+          onStateChange={setCubeState}
+          onOpenSql={(q) => openSql(q)}
+        />
+      ) : null}
+      {view === "activity" ? (
+        <ActivityView
+          request={request}
+          refreshKey={refreshKey}
+          sql={sql}
           history={history}
           metrics={metrics}
           snapshots={snapshots}
           notebooks={notebooks}
-          activeNotebookId={activeNotebookId}
-          notebookTitle={notebookTitle}
-          notebookContent={notebookContent}
           alerts={alerts}
-          alertName={alertName}
-          alertComparison={alertComparison}
-          alertThreshold={alertThreshold}
+          assistant={assistant}
           onRunAssistant={() => void runAssistant()}
-          onFillHistory={fillFromHistory}
+          onOpenSql={(q) => openSql(q)}
           onCreateSnapshot={() => void createSnapshot()}
-          onSetSql={setSql}
-          onCreateNotebook={() => void createNotebook()}
-          onSaveNotebook={() => void saveNotebook()}
-          onSelectNotebook={selectNotebook}
-          onNotebookTitleChange={setNotebookTitle}
-          onNotebookContentChange={setNotebookContent}
-          onAlertNameChange={setAlertName}
-          onAlertComparisonChange={setAlertComparison}
-          onAlertThresholdChange={setAlertThreshold}
-          onCreateAlert={() => void createAlert()}
+          onSaveNotebook={saveNotebook}
+          onCreateAlert={(a) => void createAlert(a)}
           onEvaluateAlert={(a) => void evaluateAlert(a)}
         />
-      }
-      access={
-        <AccessPanel
+      ) : null}
+      {view === "settings" ? (
+        <SettingsView
+          status={status}
+          dataSources={dataSources}
+          activeSourceId={activeSourceId}
+          onActivateSource={(id) => void activateSource(id)}
           apiKey={apiKey}
           role={role}
           authState={authState}
-          onApiKeyChange={(value) => {
-            setApiKey(value);
-            localStorage.setItem("trace_api_key", value);
+          onApiKeyChange={(v) => {
+            setApiKey(v);
+            store.set("trace_api_key", v);
           }}
-          onRoleChange={(value) => {
-            setRole(value);
-            localStorage.setItem("trace_role", value);
+          onRoleChange={(v) => {
+            setRole(v);
+            store.set("trace_role", v);
           }}
           onLogin={() => void login()}
           onLogout={logout}
+          onRefreshStatus={() => void loadStatus()}
         />
-      }
-    />
+      ) : null}
+
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast ${t.kind}`}>
+            <Icon name={t.kind === "ok" ? "check" : t.kind === "bad" ? "alert" : "info"} />
+            {t.text}
+          </div>
+        ))}
+      </div>
+    </AppShell>
   );
 };
 
