@@ -1,111 +1,162 @@
-# Trace
+<p align="center">
+  <img src="docs/readme/banner.svg" width="100%" alt="Trace: an isometric cube of revenue by region and month rising out of a SQL query.">
+</p>
 
-Trace is a virtual OLAP explorer. Point it at a database or drop in a file. It infers a semantic model (fact table, joins, measures, dimensions, time hierarchies and drill paths) and gives you an overview dashboard, an interactive 3-D cube, and a SQL workspace. Queries are pushed down to the source, read-only, policy-checked and audited.
+<p align="center">
+  <b>Point it at a database or drop in a file. It works out the model, then lets you walk around the answer.</b><br>
+  <sub>A virtual OLAP explorer. Trace infers a semantic model from whatever you connect, then gives you an overview dashboard, an interactive 3D cube and a SQL workspace. Every query is pushed down to the source, read-only, policy-checked and audited.</sub>
+</p>
 
-## Quick start (no Docker needed)
+<p align="center">
+  <sub>
+    <a href="#overview">OVERVIEW</a> &nbsp;·&nbsp;
+    <a href="#quick-start">QUICK START</a> &nbsp;·&nbsp;
+    <a href="#how-the-model-is-inferred">THE INFERRED MODEL</a> &nbsp;·&nbsp;
+    <a href="#the-cube">THE CUBE</a> &nbsp;·&nbsp;
+    <a href="#sources">SOURCES</a> &nbsp;·&nbsp;
+    <a href="#run-it">RUN IT</a> &nbsp;·&nbsp;
+    <a href="#guard-rails">GUARD RAILS</a>
+  </sub>
+</p>
+
+<br>
+
+<table>
+  <tr>
+    <td><sub>SETUP</sub><br><b>None. It infers the model.</b></td>
+    <td><sub>DIALECTS</sub><br><b>Postgres · MySQL · SQLite · Trino</b></td>
+    <td><sub>ACCESS</sub><br><b>Read-only sessions</b></td>
+    <td><sub>POLICY</sub><br><b>OPA + Keycloak</b></td>
+    <td><sub>NEEDS DOCKER</sub><br><b>No</b></td>
+  </tr>
+</table>
+
+## Overview
+
+Most BI tools ask you to describe your data before they will show it to you. Trace reads it instead.
+
+Connect a database or drop in a CSV, and it works out the main table, the joins, the measures and the drill paths on its own. Then you get an overview dashboard, a 3D cube you can walk around and slice, and a SQL workspace.
+
+> [!NOTE]
+> Every query is pushed down to the source and runs in a read-only session, with a statement timeout and a row cap. Columns in `MASK_COLUMNS` never reach non-admins.
+
+## Quick start
 
 ```bash
 npm install
+./run.sh            # http://localhost:5173, starts on the built-in retail demo
 ```
 
-```bash
-./run.sh
+## Architecture
+
+```mermaid
+flowchart LR
+    src[("your source<br/>Postgres · MySQL · SQLite<br/>Trino · CSV / JSON")] --> intro["introspect<br/>tables · keys · counts"]
+    intro --> model["inferred model<br/>fact · joins · measures<br/>drill paths"]
+    model --> sql["SQL per dialect<br/>read-only · masked"]
+    sql --> src
+    model --> ui["overview · 3D cube<br/>query workspace"]
+    opa["OPA policy"] -. "allow / deny" .-> sql
+    kc["Keycloak"] -. "who" .-> ui
+    sql -. "every fetch" .-> audit[("audit log")]
 ```
 
-Open http://localhost:5173. Trace starts on the built-in **Retail demo** (an embedded Postgres seeded with about 80k orders on first boot). From **Sources** you can switch to the **Fleet trips** SQLite sample, connect your own database, or upload a CSV/JSON file. Every view re-derives itself from the new source.
-
-`./run.sh` also starts the Docker stack (Postgres + Trino + Keycloak + OPA) when a Docker daemon is available. Set `USE_DOCKER=false` to skip it.
-
-## Data sources (hot-swappable)
-
-| Source | How to add it | Notes |
-|---|---|---|
-| PostgreSQL | Sources → Add a connection | Connection string or host/port/db/user/password, optional schema & SSL. Sessions are `default_transaction_read_only`. |
-| MySQL / MariaDB | Sources → Add a connection | Sessions are `READ ONLY` with `MAX_EXECUTION_TIME`. |
-| SQLite | Sources → Add a connection (file path on the API host) | Opened read-only via `node:sqlite`. |
-| Trino | Sources → Add a connection | Coordinator URL, catalog, schema. Keys are inferred from `*_id` naming. |
-| CSV / JSON | Sources → Upload data (drag & drop) | Loaded into an embedded Postgres workspace with inferred types (int, float, date, timestamp, boolean, text). Several files can be joined via `*_id` columns. |
-| Retail demo | built in | Synthetic retail star schema (orders, order lines, customers, products). |
-| Fleet trips | built in | Synthetic ride-hailing SQLite database, generated on first use. |
-
-Exactly one source is active at a time. Switching closes the previous connection pool, and models are cached per source. Credentials are stored server-side in `data/sources.json` (mode 600, gitignored) and are always redacted in API responses. With `AUTH_REQUIRED=true`, only `admin` can add or remove sources.
 
 ## How the model is inferred
 
-1. **Introspect** tables, columns, primary/foreign keys and row counts (`information_schema`, `PRAGMA`, …). Without declared constraints, `id` / `<table>_id` naming is used.
-2. **Pick the fact table**, scoring outbound FKs, numeric columns, dates and size. It can be overridden in the Overview or Cube.
-3. **Join** dimension tables by following foreign keys two hops out (snowflake).
-4. **Profile** candidate columns in one sampled query per table (distinct counts, text length) to keep readable dimensions and drop free text.
-5. **Drill paths**: within a table, dimensions go coarse → fine by cardinality (e.g. region → country → city). Dates become year → quarter → month.
-6. **Measures**: row count, `SUM`/`AVG` of numeric fact columns, `COUNT(DISTINCT …)` of joined entities. Money-like names get currency formatting.
-7. **SQL is generated per dialect** (Postgres, MySQL, SQLite, Trino), joining only the tables a query needs.
+Most BI tools ask you to describe your data before they will show it to you. Trace reads it.
 
-PII columns listed in `MASK_COLUMNS` (bare `email` or qualified `customers.name`) are hidden from the model and masked in raw SQL results for non-admin roles.
+1. **Introspect** tables, columns, keys and row counts. Where constraints are missing, `id` and `<table>_id` naming fills the gap.
+2. **Pick the fact table** by scoring outbound keys, numeric columns, dates and size. You can override it.
+3. **Join** dimensions by following foreign keys two hops out, a snowflake.
+4. **Profile** candidate columns with one sampled query per table, keeping readable dimensions and dropping free text.
+5. **Order drill paths** coarse to fine by cardinality (region → country → city). Dates become year → quarter → month.
+6. **Derive measures:** counts, sums and averages of numeric fact columns, distinct counts of joined entities. Money-like names get currency formatting.
+7. **Generate SQL per dialect,** joining only the tables a given query needs.
 
-## What you can do
+Switch sources and every view re-derives itself.
 
-- **Overview**: auto-generated KPIs (trailing 12 months vs prior), the main measure over time split by a coarse dimension, breakdowns, a heatmap, top entities, and the inferred model itself. Every panel links to its SQL, and clicking a bar or cell drills into the cube.
-- **Cube**: a real X × Y × Z voxel cube (react-three-fiber). Hover for crosshairs and values. Click to select and inspect. Double-click (or Enter) to drill into a cell. Click an axis label to slice; ⇧-click to dice a member out. Sweep a slice with playback, pivot (P), roll up any axis, use camera presets (1–4) and keyboard navigation (arrows, `[` `]`), with a linked pivot table underneath.
-- **Query**: schema tree with keys and row counts, model-driven presets and builder, SQL editor (⌘↵), explain, streaming (SSE), table / chart / cube result views, CSV export, snapshots.
-- **Activity**: query history with replay, audit trail, insight summaries, alerts and notebooks.
+## The cube
 
-## Repo layout
+A real X × Y × Z voxel cube, not a chart pretending to be one.
 
-```
-apps/
-  api/   Fastify API: connectors, source registry, auto semantic model, query/stream/export routes
-  web/   React + Vite UI: overview, cube (three.js / R3F), query workspace, sources
-packages/shared-types   DTOs shared by API and web
-services/               OPA policies, Keycloak realm, Trino config, legacy semantic.yml
-infra/                  Docker compose, seed and launcher scripts
-docs/                   Design, API spec, auth, pilot material
-```
+| To | Do |
+|---|---|
+| Inspect a cell | hover for crosshairs and the value, click to select |
+| Drill in | double-click, or <kbd>Enter</kbd> |
+| Slice | click an axis label |
+| Dice a member out | <kbd>Shift</kbd>-click |
+| Sweep a slice over time | playback |
+| Pivot or roll up | <kbd>P</kbd>, or roll up any axis |
+| Move around | camera presets <kbd>1</kbd>–<kbd>4</kbd>, arrows, <kbd>[</kbd> <kbd>]</kbd> |
 
-## Development
+A linked pivot table sits underneath. When a machine cannot hold 20 frames per second in 3D, the view falls back to a 2D heatmap.
+
+**Overview** builds itself: KPIs for the trailing twelve months against the prior twelve, the main measure over time, breakdowns, a heatmap, top entities, and the inferred model. Every panel links to its SQL, and clicking a bar drills into the cube. **Query** has a schema tree, model-driven presets, a SQL editor, explain, streaming results, CSV export and snapshots. **Activity** keeps query history with replay, the audit trail, insights, alerts and notebooks.
+
+## Sources
+
+Exactly one source is active at a time. Switching closes the previous connection pool, and models are cached per source.
+
+| Source | Notes |
+|---|---|
+| PostgreSQL | sessions are `default_transaction_read_only` |
+| MySQL / MariaDB | `READ ONLY` sessions with an execution time limit |
+| SQLite | opened read-only |
+| Trino | coordinator, catalog, schema |
+| CSV / JSON | drag and drop; loaded into an embedded Postgres with inferred types, joinable on `*_id` |
+| Retail demo | built in: a star schema with about 80k orders |
+| Fleet trips | built in: a synthetic ride-hailing database |
+
+## Run it
 
 ```bash
-npm run dev:api
+npm install
+./run.sh            # http://localhost:5173
 ```
 
-```bash
-npm run dev:web
-```
+Trace starts on the retail demo, running on an embedded Postgres, so it needs nothing else. If a Docker daemon is available, `./run.sh` also brings up Postgres, Trino, Keycloak and OPA; set `USE_DOCKER=false` to skip them.
 
 ```bash
-npm test
-```
-
-```bash
+npm test                                   # connector tests, no external services
 npm -w apps/web run typecheck
-```
-
-```bash
-npm run build:api && npm run build:web
-```
-
-```bash
 bash infra/scripts/sanity_check.sh
 ```
 
-The API tests cover the connectors end to end without external services: SQLite through `node:sqlite`, PostgreSQL through the real `pg` driver against PGlite served over the wire protocol, and CSV/JSON uploads.
+The connector tests run each dialect end to end without a database server: SQLite through `node:sqlite`, and PostgreSQL through the real `pg` driver talking to PGlite over the wire protocol.
 
-## Configuration
+## Guard rails
 
-Copy `.env.example` to `.env`. Key variables:
+| | |
+|---|---|
+| **Read-only** | every external session is opened read-only, with a statement timeout and a row cap |
+| **PII masking** | columns in `MASK_COLUMNS` are hidden from the model and masked in raw results for non-admins |
+| **Policy** | OPA evaluates queries, schema access, exports and source activation |
+| **Auth** | Keycloak JWT with PKCE in the web app, or an API key |
+| **Audit** | every data fetch is logged |
+| **Credentials** | stored server-side, mode 600, never in git |
 
-| Variable | Default | Purpose |
+| Variable | Default | |
 |---|---|---|
-| `ENGINE` | `auto` | Initial source: `auto` (Trino if reachable, else last used), `embedded`, `trino` |
-| `AUTH_REQUIRED` | `false` | Require an API key / JWT; restricts source management to admins |
-| `MASK_COLUMNS` | `customers.name,drivers.name,email,phone` | PII hidden for non-admins |
-| `MAX_RESULT_ROWS` | `50000` | Row cap per query |
-| `STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout on external sources |
-| `OPA_ENABLED` | `false` | Enforce policies via OPA |
+| `ENGINE` | `auto` | Trino if reachable, else the last source |
+| `AUTH_REQUIRED` | `false` | restricts source management to admins |
+| `MASK_COLUMNS` | `customers.name,drivers.name,email,phone` | |
+| `MAX_RESULT_ROWS` | `50000` | |
+| `STATEMENT_TIMEOUT_MS` | `30000` | |
+| `OPA_ENABLED` | `false` | |
 
-## Docs
+<details>
+<summary><b>Layout and docs</b></summary>
+<br>
 
-- [Product walkthrough](docs/PRODUCT_WALKTHROUGH.md)
-- [System design](docs/SYSTEM_DESIGN.md)
-- [API spec](docs/API_SPEC.md)
-- [Auth setup](docs/AUTH_SETUP.md)
-- [MVP status](docs/MVP_STATUS.md)
+```
+apps/api/               Fastify: connectors, source registry, the inferred model, query and stream routes
+apps/web/               React + Vite: overview, cube (three.js), query workspace, sources
+packages/shared-types   DTOs shared by both
+services/               OPA policies, Keycloak realm, Trino config
+infra/                  compose, seed and launcher scripts
+```
+
+[Product walkthrough](docs/PRODUCT_WALKTHROUGH.md) · [System design](docs/SYSTEM_DESIGN.md) · [API spec](docs/API_SPEC.md) · [Auth setup](docs/AUTH_SETUP.md) · [MVP status](docs/MVP_STATUS.md)
+
+</details>
