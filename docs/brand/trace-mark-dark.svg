@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Trace logo">
+<g transform="translate(0 0) scale(1)">
+  <polygon points="32,9 52,20.5 32,32 12,20.5" fill="#f2f0ea"/>
+  <polygon points="12,20.5 32,32 32,55 12,43.5" fill="#b4b1a8"/>
+  <polygon points="32,32 52,20.5 52,43.5 32,55" fill="#6f6d67"/>
+  <path d="M12 20.5 32 32 52 20.5M32 32v23" fill="none" stroke="#111113" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M14.80 40.05 L21.20 37.29 L26.40 43.96 L32.00 41.66 L39.60 34.53 L44.40 34.07 L49.20 24.41" fill="none" stroke="#111113" stroke-width="6.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M14.80 40.05 L21.20 37.29 L26.40 43.96 L32.00 41.66 L39.60 34.53 L44.40 34.07 L49.20 24.41" fill="none" stroke="#f5a524" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="49.20" cy="24.41" r="4.6" fill="#f5a524" stroke="#111113" stroke-width="1.6"/>
+</g>
+</svg>

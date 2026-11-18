@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="Trace: point it at your data, walk around the answer.">
+<defs>
+  <pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.045"/></pattern>
+  <radialGradient id="glow" cx="0.82" cy="0.45" r="0.55"><stop offset="0" stop-color="#f5a524" stop-opacity="0.16"/><stop offset="1" stop-color="#f5a524" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1200" height="630" fill="#0b0b0c"/>
+<rect width="1200" height="630" fill="url(#g)"/>
+<rect width="1200" height="630" fill="url(#glow)"/>
+<g transform="translate(700 95) scale(6.6)">
+  <polygon points="32,9 52,20.5 32,32 12,20.5" fill="#f2f0ea"/>
+  <polygon points="12,20.5 32,32 32,55 12,43.5" fill="#b4b1a8"/>
+  <polygon points="32,32 52,20.5 52,43.5 32,55" fill="#6f6d67"/>
+  <path d="M12 20.5 32 32 52 20.5M32 32v23" fill="none" stroke="#111113" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M14.80 40.05 L21.20 37.29 L26.40 43.96 L32.00 41.66 L39.60 34.53 L44.40 34.07 L49.20 24.41" fill="none" stroke="#111113" stroke-width="6.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M14.80 40.05 L21.20 37.29 L26.40 43.96 L32.00 41.66 L39.60 34.53 L44.40 34.07 L49.20 24.41" fill="none" stroke="#f5a524" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="49.20" cy="24.41" r="4.6" fill="#f5a524" stroke="#111113" stroke-width="1.6"/>
+</g>
+<g transform="translate(88 120) scale(1.5)">
+  <polygon points="32,9 52,20.5 32,32 12,20.5" fill="#f2f0ea"/>
+  <polygon points="12,20.5 32,32 32,55 12,43.5" fill="#b4b1a8"/>
+  <polygon points="32,32 52,20.5 52,43.5 32,55" fill="#6f6d67"/>
+  <path d="M12 20.5 32 32 52 20.5M32 32v23" fill="none" stroke="#111113" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M14.80 40.05 L21.20 37.29 L26.40 43.96 L32.00 41.66 L39.60 34.53 L44.40 34.07 L49.20 24.41" fill="none" stroke="#111113" stroke-width="6.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M14.80 40.05 L21.20 37.29 L26.40 43.96 L32.00 41.66 L39.60 34.53 L44.40 34.07 L49.20 24.41" fill="none" stroke="#f5a524" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="49.20" cy="24.41" r="4.6" fill="#f5a524" stroke="#111113" stroke-width="1.6"/>
+</g>
+<path transform="translate(206 128) scale(2.3)" d="M6 13.5V34.5Q6 40 11.5 40 M1 22H12.5 M19.5 22V40 M19.5 30.5C19.5 25 23 22 29 22 M41.5 22A9 9 0 1 0 41.5 40A9 9 0 1 0 41.5 22 M50.5 22V40 M72.4 25.2A9 9 0 1 0 72.4 36.8 M80 31H98A9 9 0 1 0 95.4 37.4" fill="none" stroke="#ebe9e4" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/>
+<g font-family="IBM Plex Sans, Helvetica, Arial, sans-serif" fill="#ebe9e4">
+  <text x="92" y="330" font-size="44" font-weight="600" letter-spacing="-0.5">Point it at your data.</text>
+  <text x="92" y="384" font-size="44" font-weight="600" letter-spacing="-0.5" fill="#f5a524">Walk around the answer.</text>
+  <text x="92" y="450" font-size="24" fill-opacity="0.62">Infers tables, joins, measures and drill paths</text>
+  <text x="92" y="482" font-size="24" fill-opacity="0.62">from any database or CSV. Then explore it in 3D.</text>
+</g>
+<g font-family="IBM Plex Mono, Menlo, monospace" font-size="18" fill="#6f6e69" letter-spacing="2">
+  <text x="92" y="560">POSTGRES · MYSQL · SQLITE · TRINO · CSV</text>
+</g>
+</svg>

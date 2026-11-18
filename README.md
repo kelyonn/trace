@@ -1,4 +1,11 @@
 <p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/trace-logo-dark.svg">
+    <img src="docs/brand/trace-logo-light.svg" height="64" alt="Trace">
+  </picture>
+</p>
+
+<p align="center">
   <img src="docs/readme/banner.svg" width="100%" alt="Trace: an isometric cube of revenue by region and month rising out of a SQL query.">
 </p>
 

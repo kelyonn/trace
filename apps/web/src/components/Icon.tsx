@@ -73,19 +73,3 @@ const Icon = ({ name, size, className, title }: Props) => (
 );
 
 export default Icon;
-
-export const BrandMark = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 32 32" className={className} aria-hidden>
-    <defs>
-      <linearGradient id="tr-g1" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stopColor="#5598e7" />
-        <stop offset="1" stopColor="#9085e9" />
-      </linearGradient>
-    </defs>
-    <rect x="1" y="1" width="30" height="30" rx="8" fill="url(#tr-g1)" />
-    <path d="M16 6.5 7.5 11v10L16 25.5 24.5 21V11z" fill="none" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" opacity="0.95" />
-    <path d="M7.5 11 16 15.5 24.5 11M16 15.5v10" fill="none" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" opacity="0.7" />
-    <rect x="12.4" y="17.5" width="2" height="5" rx="1" fill="#fff" />
-    <rect x="17.6" y="15.5" width="2" height="7" rx="1" fill="#fff" opacity="0.85" />
-  </svg>
-);

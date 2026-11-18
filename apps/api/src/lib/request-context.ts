@@ -33,7 +33,8 @@ export async function buildTraceContext(request: FastifyRequest): Promise<TraceC
 
 /** Attach auth + trace context hooks to a Fastify instance (call on the same scope as routes). */
 export function attachTraceHooks(fastify: FastifyInstance): void {
-  fastify.decorateRequest("trace", null);
+  // Fastify 5 types the default by the decorated property; it is set in the preHandler below.
+  fastify.decorateRequest("trace", null as unknown as TraceContext);
 
   fastify.addHook("preHandler", async (request: FastifyRequest, reply: FastifyReply) => {
     if (!isPublicPath(request.url)) {
