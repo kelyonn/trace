@@ -23,11 +23,21 @@ type Props = {
   children: ReactNode;
 };
 
-/** A plain glyph: three stacked planes of a cube, drawn with hairlines. */
+/** The Trace mark: an isometric cube with an amber trace through its faces. Follows the theme. */
 const Glyph = () => (
-  <svg viewBox="0 0 16 16" aria-hidden>
-    <path d="M8 1.5 14 4.8v6.4L8 14.5 2 11.2V4.8z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-    <path d="M2 4.8 8 8.1l6-3.3M8 8.1v6.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+  <svg viewBox="4 6 56 52" aria-hidden>
+    <polygon points="32,9 52,20.5 32,32 12,20.5" fill="currentColor" />
+    <polygon points="12,20.5 32,32 32,55 12,43.5" fill="currentColor" opacity="0.62" />
+    <polygon points="32,32 52,20.5 52,43.5 32,55" fill="currentColor" opacity="0.34" />
+    <path
+      d="M14.8 40.05 L21.2 37.29 L26.4 43.96 L32 41.66 L39.6 34.53 L44.4 34.07 L49.2 24.41"
+      fill="none"
+      stroke="var(--select)"
+      strokeWidth="4.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <circle cx="49.2" cy="24.41" r="4.4" fill="var(--select)" />
   </svg>
 );
 

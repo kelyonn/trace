@@ -71,6 +71,8 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
       const { sql, role, maskColumns: colsToMask } = job;
       const sourceId = activeSourceId();
 
+      // We write the SSE stream to the raw socket ourselves, so take the reply out of Fastify's hands.
+      reply.hijack();
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -158,7 +160,6 @@ export default async function streamRoutes(fastify: FastifyInstance): Promise<vo
         reply.raw.end();
       }
 
-      return reply;
     }
   );
 }
